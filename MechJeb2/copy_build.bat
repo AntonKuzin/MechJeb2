@@ -1,15 +1,13 @@
+@ECHO OFF
 
 IF NOT DEFINED MONO echo MONO env variable not defined
 IF NOT DEFINED KSPDIR echo KSPDIR env variable not defined
 
-SET TargetPath=%1
-SET TargetDir=%2
-SET TargetName=%3
-SET ProjectDir=%4
+SET BinDir=%1
+SET TargetName=%2
+SET ProjectDir=%3
 
-echo:
-echo Target Path: %TargetPath%
-echo Target Dir: %TargetDir%
+echo Target Dir: %BinDir%
 echo Target Name: %TargetName%
 echo Project Dir: %ProjectDir%
 echo:
@@ -29,35 +27,37 @@ IF NOT EXIST "%KSPDIR%\*" (
 echo:
 echo Copying to "%KSPDIR%"
 echo:
-IF EXIST "%TargetPath%" xcopy /Y /I "%TargetPath%" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%%TargetName%.dll" xcopy /Y /I "%BinDir%%TargetName%.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%%TargetName%.pdb" xcopy /Y /I "%TargetDir%%TargetName%.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%%TargetName%.pdb" xcopy /Y /I "%BinDir%%TargetName%.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%JetBrains.Annotations.dll" xcopy /Y /I "%TargetDir%JetBrains.Annotations.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%JetBrains.Annotations.dll" xcopy /Y /I "%BinDir%JetBrains.Annotations.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%JetBrains.Annotations.xml" xcopy /Y /I "%TargetDir%JetBrains.Annotations.xml" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%JetBrains.Annotations.xml" xcopy /Y /I "%BinDir%JetBrains.Annotations.xml" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%MechJebLib.dll" xcopy /Y /I "%TargetDir%MechJebLib.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%MechJebLib.dll" xcopy /Y /I "%BinDir%MechJebLib.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%MechJebLib.pdb" xcopy /Y /I "%TargetDir%MechJebLib.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%MechJebLib.pdb" xcopy /Y /I "%BinDir%MechJebLib.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%MechJebLibBindings.dll" xcopy /Y /I "%TargetDir%MechJebLibBindings.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%MechJebLibBindings.dll" xcopy /Y /I "%BinDir%MechJebLibBindings.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%MechJebLibBindings.pdb" xcopy /Y /I "%TargetDir%MechJebLibBindings.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%MechJebLibBindings.pdb" xcopy /Y /I "%BinDir%MechJebLibBindings.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%alglib.dll" xcopy /Y /I "%TargetDir%alglib.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%alglib.dll" xcopy /Y /I "%BinDir%alglib.dll" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
 
-IF EXIST "%TargetDir%alglib.pdb" xcopy /Y /I "%TargetDir%alglib.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
+IF EXIST "%BinDir%alglib.pdb" xcopy /Y /I "%BinDir%alglib.pdb" "%KSPDIR%\GameData\MechJeb2\Plugins\"
 echo:
+
+goto skip
 
 IF EXIST %ProjectDir%..\Bundles xcopy /S /Y /I "%ProjectDir%..\Bundles" "%KSPDIR%\GameData\MechJeb2\Bundles"
 echo:
@@ -74,6 +74,6 @@ echo:
 IF EXIST %ProjectDir%..\LandingSites.cfg xcopy /Y /I "%ProjectDir%..\LandingSites.cfg" "%KSPDIR%\GameData\MechJeb2\"
 echo:
 
-
+:skip
 :: Display the time of compilation so I don't waste time testing code I did not compile...
 time /t

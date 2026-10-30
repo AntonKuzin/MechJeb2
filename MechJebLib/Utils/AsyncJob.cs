@@ -62,13 +62,7 @@ namespace MechJebLib.Utils
             CancelToken = _cts.Token;
             // the task must not take the token, or a cancel before it starts would skip RunWrapped and leave the state in
             // Running forever.  Run sees the cancel through the CancelToken instead.
-            _task = Task.Factory.StartNew(
-                _runWrapped,
-                o,
-                CancellationToken.None,
-                TaskCreationOptions.DenyChildAttach | TaskCreationOptions.LongRunning,
-                TaskScheduler.Default
-            );
+            _task = Task.Run(() => _runWrapped(o), CancellationToken.None);
             return true;
         }
 

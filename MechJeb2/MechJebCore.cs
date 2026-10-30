@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -33,7 +33,7 @@ namespace MuMech
         private bool _ready;
 
         public MechJebModuleGuidanceController Guidance;
-        public MechJebModulePSGGlueBall Glueball;
+        public MechJebModulePSGSimulation PSGSimulation;
         public MechJebModuleAttitudeController Attitude;
         public MechJebModuleStagingController Staging;
         public MechJebModuleThrustController Thrust;
@@ -54,9 +54,10 @@ namespace MuMech
         public MechJebModuleSmartASS SmartASS;
         public MechJebModuleAscentBaseAutopilot Ascent => AscentSettings.AscentAutopilot;
 
-        public readonly VesselState VesselState;
+        public VesselState VesselState;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "MechJeb"), UI_Toggle(disabledText = "#MechJeb_Disabled", enabledText = "#MechJeb_Enabled")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "MechJeb")]
+        [UI_Toggle(disabledText = "#MechJeb_Disabled", enabledText = "#MechJeb_Enabled")]
         //DisabledEnabled
         public bool running = true;
 
@@ -167,7 +168,7 @@ namespace MuMech
 
             MechJebModuleSmartASS masterSmartASS = masterMechJeb.GetComputerModule<MechJebModuleSmartASS>();
 
-            if (masterSmartASS is { Hidden: false })
+            if (masterSmartASS is { TechLocked: false })
             {
                 masterSmartASS.mode = MechJebModuleSmartASS.Mode.ORBITAL;
                 masterSmartASS.target = smartassTarget;
@@ -191,7 +192,7 @@ namespace MuMech
 
             MechJebModuleTranslatron moduleTranslatron = masterMechJeb.GetComputerModule<MechJebModuleTranslatron>();
 
-            if (moduleTranslatron is { Hidden: false })
+            if (moduleTranslatron is { TechLocked: false })
                 moduleTranslatron.PanicSwitch();
         }
 
@@ -219,7 +220,7 @@ namespace MuMech
             {
                 MechJebModuleTranslatron moduleTranslatron = masterMechJeb.GetComputerModule<MechJebModuleTranslatron>();
 
-                if (moduleTranslatron is { Hidden: false })
+                if (moduleTranslatron is { TechLocked: false })
                 {
                     Thrust.TransKillH = !Thrust.TransKillH;
                 }
@@ -265,7 +266,7 @@ namespace MuMech
 
             MechJebModuleTranslatron moduleTranslatron = masterMechJeb.GetComputerModule<MechJebModuleTranslatron>();
 
-            if (moduleTranslatron is { Hidden: false })
+            if (moduleTranslatron is { TechLocked: false })
             {
                 if (Thrust.Users.Count > 1 && !Thrust.Users.Contains(moduleTranslatron))
                     return;
@@ -290,7 +291,7 @@ namespace MuMech
 
             MechJebModuleTranslatron moduleTranslatron = masterMechJeb.GetComputerModule<MechJebModuleTranslatron>();
 
-            if (moduleTranslatron is { Hidden: false })
+            if (moduleTranslatron is { TechLocked: false })
                 Thrust.TransSpdAct = (relative ? Thrust.TransSpdAct : 0) + speed;
             else
                 Debug.LogError("MechJeb couldn't find MechJebModuleTranslatron for translatron control via action group.");
@@ -302,11 +303,6 @@ namespace MuMech
         private static Vessel _lastFocus;
 
         public bool someModuleAreLocked; // True if any module was locked by the R&D system
-
-        public MechJebCore()
-        {
-            VesselState = new VesselState(this);
-        }
 
         //Returns whether the vessel we've registered OnFlyByWire with is the correct one.
         //If it isn't the correct one, fixes it before returning false
@@ -415,6 +411,10 @@ namespace MuMech
 
             if (vessel != null) vessel.OnFlyByWire -= OnFlyByWire;
             _controlledVessel = null;
+
+            // OnStart re-adds these, and the new modules re-add their draw callbacks
+            RemoveGameEvents();
+            _postDrawQueue.Clear();
 
             //Start fresh
             OnLoad(null);
@@ -756,6 +756,7 @@ namespace MuMech
                 Debug.LogError("MechJeb moduleRegistry loading threw an exception in LoadComputerModules: " + e);
             }
 
+            VesselState = GetComputerModule<VesselState>();
             Attitude = GetComputerModule<MechJebModuleAttitudeController>();
             Staging = GetComputerModule<MechJebModuleStagingController>();
             Thrust = GetComputerModule<MechJebModuleThrustController>();
@@ -770,7 +771,7 @@ namespace MuMech
             Landing = GetComputerModule<MechJebModuleLandingAutopilot>();
             Settings = GetComputerModule<MechJebModuleSettings>();
             Guidance = GetComputerModule<MechJebModuleGuidanceController>();
-            Glueball = GetComputerModule<MechJebModulePSGGlueBall>();
+            PSGSimulation = GetComputerModule<MechJebModulePSGSimulation>();
             StageStats = GetComputerModule<MechJebModuleStageStats>();
             AscentSettings = GetComputerModule<MechJebModuleAscentSettings>();
             Spinup = GetComputerModule<MechJebModuleSpinupController>();
@@ -808,6 +809,12 @@ namespace MuMech
                     _partSettings = _savedConfig[part.name];
                 }
 
+                // Part prefabs only need the stash above.  Instances are cloned without the prefab's computer
+                // modules and rebuild them in their own OnLoad/OnStart, so booting a whole MechJeb on every
+                // prefab during part compilation is wasted work that would be retained for the whole session.
+                if (HighLogic.LoadedScene == GameScenes.LOADING)
+                    return;
+
                 LoadComputerModules();
 
                 var global = new ConfigNode("MechJebGlobalSettings");
@@ -829,19 +836,16 @@ namespace MuMech
                 }
 
                 var type = new ConfigNode("MechJebTypeSettings");
-                string vesselName =
-                    vessel != null
-                        ? string.Join("_", vessel.vesselName.Split(Path.GetInvalidFileNameChars()))
-                        : ""; // Strip illegal char from the filename
-                if (vessel != null && MuUtils.FileExistsCreateDirectory(MuUtils.GetCfgPath("mechjeb_settings_type_" + vesselName + ".cfg")))
+                string typePath = vessel != null ? MuUtils.GetTypeCfgPath(vessel.vesselName) : null;
+                if (typePath != null && MuUtils.FileExistsCreateDirectory(typePath))
                 {
                     try
                     {
-                        type = ConfigNode.Load(MuUtils.GetCfgPath("mechjeb_settings_type_" + vesselName + ".cfg"));
+                        type = ConfigNode.Load(typePath);
                     }
                     catch (Exception e)
                     {
-                        Debug.LogError("MechJebCore.OnLoad caught an exception trying to load mechjeb_settings_type_" + vesselName + ".cfg: " + e);
+                        Debug.LogError("MechJebCore.OnLoad caught an exception trying to load " + typePath + ": " + e);
                     }
                 }
 
@@ -883,6 +887,10 @@ namespace MuMech
                     RemoveComputerModule(win);
                 }
 
+                ConfigNode partLocal = _partSettings != null && _partSettings.HasNode("MechJebLocalSettings")
+                    ? _partSettings.GetNode("MechJebLocalSettings")
+                    : null;
+
                 foreach (ComputerModule module in GetComputerModules<ComputerModule>())
                 {
                     try
@@ -892,6 +900,15 @@ namespace MuMech
                         ConfigNode moduleType = type.HasNode(moduleTypeName) ? type.GetNode(moduleTypeName) : null;
                         ConfigNode moduleGlobal = global.HasNode(moduleTypeName) ? global.GetNode(moduleTypeName) : null;
                         module.OnLoad(moduleLocal, moduleType, moduleGlobal);
+
+                        // R&D gating always comes from the part cfg (and its MM patches), not the saved vessel/craft, so
+                        // gating changes (new gates, MechJebUnlocked) also apply to existing saves
+                        if (_partSettings != null)
+                        {
+                            ConfigNode partModuleLocal = partLocal != null && partLocal.HasNode(moduleTypeName) ? partLocal.GetNode(moduleTypeName) : null;
+                            module.unlockParts = partModuleLocal?.GetValue("unlockParts") ?? "";
+                            module.unlockTechs = partModuleLocal?.GetValue("unlockTechs") ?? "";
+                        }
                     }
                     catch (Exception e)
                     {
@@ -992,8 +1009,7 @@ namespace MuMech
                 Profiler.BeginSample("MechJebCore.OnSave.type");
                 if (type != null && vessel != null)
                 {
-                    string vesselName = string.Join("_", vessel.vesselName.Split(Path.GetInvalidFileNameChars())); // Strip illegal char from the filename
-                    type.Save(MuUtils.GetCfgPath("mechjeb_settings_type_" + vesselName + ".cfg"));
+                    type.Save(MuUtils.GetTypeCfgPath(vessel.vesselName));
                 }
 
                 Profiler.EndSample();
@@ -1020,11 +1036,7 @@ namespace MuMech
                 OnSave(null);
             }
 
-            GameEvents.onShowUI.Remove(OnShowGUI);
-            GameEvents.onHideUI.Remove(OnHideGUI);
-            GameEvents.onVesselChange.Remove(UnlockControl);
-            GameEvents.onVesselWasModified.Remove(OnVesselWasModified);
-            GameEvents.onVesselStandardModification.Remove(OnVesselStandardModification);
+            RemoveGameEvents();
 
             if (_weLockedInputs)
             {
@@ -1050,6 +1062,15 @@ namespace MuMech
             }
 
             _controlledVessel = null;
+        }
+
+        private void RemoveGameEvents()
+        {
+            GameEvents.onShowUI.Remove(OnShowGUI);
+            GameEvents.onHideUI.Remove(OnHideGUI);
+            GameEvents.onVesselChange.Remove(UnlockControl);
+            GameEvents.onVesselWasModified.Remove(OnVesselWasModified);
+            GameEvents.onVesselStandardModification.Remove(OnVesselStandardModification);
         }
 
         private void OnFlyByWire(FlightCtrlState s)
@@ -1143,7 +1164,7 @@ namespace MuMech
                     Profiler.BeginSample(module.ProfilerName);
                     try
                     {
-                        if (module.Enabled) module.DrawGUI(HighLogic.LoadedSceneIsEditor);
+                        if (module.Enabled && !MechJebUiHost.Owns(module)) module.DrawGUI(HighLogic.LoadedSceneIsEditor);
                     }
                     catch (Exception e)
                     {
@@ -1173,7 +1194,7 @@ namespace MuMech
         //Lifted this more or less directly from the Kerbal Engineer source. Thanks cybutek!
         private void PreventClickthrough()
         {
-            bool mouseOverWindow = GuiUtils.MouseIsOverWindow(this);
+            bool mouseOverWindow = GuiUtils.MouseIsOverWindow(this) || MechJebUiHost.MouseOverHostWindow();
             switch (_weLockedInputs)
             {
                 case false when mouseOverWindow && !Input.GetMouseButton(1):

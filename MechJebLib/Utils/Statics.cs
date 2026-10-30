@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
  * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
@@ -274,6 +274,19 @@ namespace MechJebLib.Utils
         }
 
         /// <summary>
+        ///     Returns the equivalent value in degrees between 0 and 360.
+        /// </summary>
+        /// <param name="x">Degrees</param>
+        /// <returns>Degrees</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double Clamp360(double x)
+        {
+            x %= 360;
+            x = x < 0 ? x + 360 : x;
+            return x >= 360 ? 0 : x;
+        }
+
+        /// <summary>
         ///     Returns the equivalent value in radians between -pi and pi.
         /// </summary>
         /// <param name="x">Radians</param>
@@ -283,6 +296,18 @@ namespace MechJebLib.Utils
         {
             x = Clamp2Pi(x);
             return x > PI ? x - TAU : x;
+        }
+
+        /// <summary>
+        ///     Returns the equivalent value in degrees between -180 and 180.
+        /// </summary>
+        /// <param name="x">Degrees</param>
+        /// <returns>Degrees</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static double Clamp180(double x)
+        {
+            x = Clamp360(x);
+            return x > 180 ? x - 360 : x;
         }
 
         /// <summary>
@@ -300,6 +325,22 @@ namespace MechJebLib.Utils
         /// <returns>True if all the components are finite</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsFinite(V3 v) => IsFinite(v[0]) && IsFinite(v[1]) && IsFinite(v[2]);
+
+        /// <summary>
+        ///     Helper to check if a vector is finite in all its components (not NaN or Infinity).
+        /// </summary>
+        /// <param name="v">Vector</param>
+        /// <returns>True if all the components are finite</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsFinite(V2 v) => IsFinite(v[0]) && IsFinite(v[1]);
+
+        /// <summary>
+        ///     Helper to check if a vector is finite in all its components (not NaN or Infinity).
+        /// </summary>
+        /// <param name="v">Vector</param>
+        /// <returns>True if all the components are finite</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsFinite(V4 v) => IsFinite(v[0]) && IsFinite(v[1]) && IsFinite(v[2]) && IsFinite(v[3]);
 
         /*
         /// <summary>
@@ -402,6 +443,98 @@ namespace MechJebLib.Utils
         }
 
         /// <summary>
+        ///     Compares two V2 values with a relative tolerance.
+        /// </summary>
+        /// <param name="a">first vector</param>
+        /// <param name="b">second vector</param>
+        /// <param name="epsilon">relative tolerance (e.g. 1e-15)</param>
+        /// <returns>true if the values are nearly the same</returns>
+        public static bool NearlyEqual(V2 a, V2 b, double epsilon = EPS)
+        {
+            if (a.Equals(b))
+                return true;
+
+            var diff = V2.Abs(a - b);
+
+            double epsilon2 = Max(a.magnitude, b.magnitude) * epsilon;
+
+            // if we have negative or nan values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
+
+            for (int i = 0; i < 2; i++)
+            {
+                if ((a[i] == 0 || b[i] == 0) && diff[i] > epsilon)
+                    return false;
+                if (diff[i] > epsilon2)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        ///     Compares two V4 values with a relative tolerance.
+        /// </summary>
+        /// <param name="a">first vector</param>
+        /// <param name="b">second vector</param>
+        /// <param name="epsilon">relative tolerance (e.g. 1e-15)</param>
+        /// <returns>true if the values are nearly the same</returns>
+        public static bool NearlyEqual(V4 a, V4 b, double epsilon = EPS)
+        {
+            if (a.Equals(b))
+                return true;
+
+            var diff = V4.Abs(a - b);
+
+            double epsilon2 = Max(a.magnitude, b.magnitude) * epsilon;
+
+            // if we have negative or nan values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
+
+            for (int i = 0; i < 4; i++)
+            {
+                if ((a[i] == 0 || b[i] == 0) && diff[i] > epsilon)
+                    return false;
+                if (diff[i] > epsilon2)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        ///     Compares two M2 matrices with a relative tolerance.
+        /// </summary>
+        /// <param name="a">first matrix</param>
+        /// <param name="b">second matrix</param>
+        /// <param name="epsilon">relative tolerance (e.g. 1e-15)</param>
+        /// <returns>true if the values are nearly the same</returns>
+        public static bool NearlyEqual(M2 a, M2 b, double epsilon = EPS)
+        {
+            if (a.Equals(b))
+                return true;
+
+            double epsilon2 = Max(a.max_magnitude, b.max_magnitude) * epsilon;
+
+            // if we have nan or infinite values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
+
+            for (int i = 0; i < 4; i++)
+            {
+                if ((a[i] == 0 || b[i] == 0) && Abs(a[i] - b[i]) > epsilon)
+                    return false;
+
+                if (Abs(a[i] - b[i]) > epsilon2)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         ///     Compares two M3 matrices with a relative tolerance.
         /// </summary>
         /// <param name="a">first vector</param>
@@ -415,7 +548,41 @@ namespace MechJebLib.Utils
 
             double epsilon2 = Max(a.max_magnitude, b.max_magnitude) * epsilon;
 
+            // if we have nan or infinite values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
+
             for (int i = 0; i < 9; i++)
+            {
+                if ((a[i] == 0 || b[i] == 0) && Abs(a[i] - b[i]) > epsilon)
+                    return false;
+
+                if (Abs(a[i] - b[i]) > epsilon2)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        ///     Compares two M4 matrices with a relative tolerance.
+        /// </summary>
+        /// <param name="a">first matrix</param>
+        /// <param name="b">second matrix</param>
+        /// <param name="epsilon">relative tolerance (e.g. 1e-15)</param>
+        /// <returns>true if the values are nearly the same</returns>
+        public static bool NearlyEqual(M4 a, M4 b, double epsilon = EPS)
+        {
+            if (a.Equals(b))
+                return true;
+
+            double epsilon2 = Max(a.max_magnitude, b.max_magnitude) * epsilon;
+
+            // if we have nan or infinite values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
+
+            for (int i = 0; i < 16; i++)
             {
                 if ((a[i] == 0 || b[i] == 0) && Abs(a[i] - b[i]) > epsilon)
                     return false;
@@ -441,6 +608,10 @@ namespace MechJebLib.Utils
 
             double epsilon2 = Max(Max(Max(Abs(a.x), Abs(a.y)), Max(Abs(a.z), Abs(a.w))),
                 Max(Max(Abs(b.x), Abs(b.y)), Max(Abs(b.z), Abs(b.w)))) * epsilon;
+
+            // if we have nan or infinite values, then if we weren't Equals above, we're different
+            if (!IsFinite(epsilon2))
+                return false;
 
             if ((a.x == 0 || b.x == 0) && Abs(a.x - b.x) > epsilon)
                 return false;
@@ -517,7 +688,7 @@ namespace MechJebLib.Utils
             sb.Append($"{row:0000}: ");
             int last = user.Count - 1;
 
-            bool failed =  false;
+            bool failed = false;
 
             for (int i = 0; i <= last; i++)
             {
@@ -537,8 +708,8 @@ namespace MechJebLib.Utils
                     sb.Append("❌"); // mistake
                     failed = true;
                 }
-
             }
+
             sb.Append("\n");
 
             return failed;
@@ -568,7 +739,7 @@ namespace MechJebLib.Utils
 
             if (ascentProblemConstraintNames != null)
             {
-                foreach (var idx in failedConstraints)
+                foreach (int idx in failedConstraints)
                     sb.AppendLine(ascentProblemConstraintNames[idx]);
             }
 
@@ -672,7 +843,8 @@ namespace MechJebLib.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Print(string message) => Logger.Print(message);
 
-        [Conditional("DEBUG"), MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [Conditional("DEBUG")]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void DebugPrint(string message) => Logger.Print(message);
 
         public static void CopyFrom(this double[] dest, double[] source)

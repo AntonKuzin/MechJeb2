@@ -24,6 +24,9 @@ namespace MuMech
         }
 
         protected AbortStage abort = AbortStage.OFF;
+
+        // for the new UI: true while the panic switch is engaged
+        internal bool Aborting => abort != AbortStage.OFF;
         protected double burnUpTime;
 
         protected bool autoMode;
@@ -172,7 +175,7 @@ namespace MuMech
                 {
                     Core.Thrust.ThrustOff();
                     Core.Thrust.Users.Remove(this);
-                    Core.Attitude.attitudeDeactivate();
+                    Core.Attitude.AttitudeDeactivate();
                 }
 
                 abort = AbortStage.OFF;
@@ -254,7 +257,7 @@ namespace MuMech
                         if (Planetarium.GetUniversalTime() - burnUpTime < 2 || VesselState.SpeedVertical < 10)
                         {
                             Core.Thrust.Tmode = MechJebModuleThrustController.TMode.DIRECT;
-                            Core.Attitude.attitudeTo(Vector3d.up, AttitudeReference.SURFACE_NORTH, this);
+                            Core.Attitude.AttitudeTo(Vector3d.up, AttitudeReference.SURFACE_NORTH, this);
                             double int_error = Math.Abs(Vector3d.Angle(VesselState.Up, VesselState.Forward));
                             Core.Thrust.TransSpdAct = int_error < 90 ? 100 : 0;
                         }

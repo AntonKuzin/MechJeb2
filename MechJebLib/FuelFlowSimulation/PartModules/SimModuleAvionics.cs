@@ -1,18 +1,17 @@
-﻿/*
+/*
  * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
  * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
 
 using System.Collections.Generic;
 using MechJebLib.Utils;
-using static System.FormattableString;
 
 namespace MechJebLib.FuelFlowSimulation.PartModules
 {
     // this handles ControllableMass for both ModuleAvionics and ModuleProceduralAvionics
     public class SimModuleAvionics : SimPartModule
     {
-        private static readonly ObjectPool<SimModuleAvionics> _pool = new ObjectPool<SimModuleAvionics>(New, Clear);
+        private static readonly ObjectPool<SimModuleAvionics> _pool = new ObjectPool<SimModuleAvionics>(New, m => m.Clear());
 
         public double ControllableMass;
 
@@ -25,11 +24,14 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             return avionics;
         }
 
-        private static SimModuleAvionics New() => new SimModuleAvionics();
-
-        private static void Clear(SimModuleAvionics m)
+        protected override void Clear()
         {
+            base.Clear();
+            // the builder only sets this when RP-0 is loaded correctly
+            ControllableMass = 0;
         }
+
+        private static SimModuleAvionics New() => new SimModuleAvionics();
 
         public override string ToString()
         {

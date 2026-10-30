@@ -26,8 +26,8 @@ namespace MechJebLibBindings.FuelFlowSimulation
             private static readonly FieldContext _rfSpoolUpTime = Assembly("RealFuels").Class("RealFuels.ModuleEnginesRF").Field("effectiveSpoolUpTime");
             private static readonly FieldContext _rfAutoCutoff = Assembly("RealFuels").Class("RealFuels.ModuleEnginesRF").Field("autoCutoff");
             private static readonly FieldContext _rfUllage = Assembly("RealFuels").Class("RealFuels.ModuleEnginesRF").Field("ullage");
-            private static readonly FieldContext _rp0ControllableMass = Assembly("RP0").Class("RP0.ProceduralAvionics.ModuleProceduralAvionics").Field("controllableMass");
-            private static readonly FieldContext _rp0MassLimit = Assembly("RP0").Class("RP0.ModuleAvionics").Field("massLimit");
+            private static readonly FieldContext _rp0ControllableMass = Assembly("RP-0").Class("RP0.ProceduralAvionics.ModuleProceduralAvionics").Field("controllableMass");
+            private static readonly FieldContext _rp0MassLimit = Assembly("RP-0").Class("RP0.ModuleAvionics").Field("massLimit");
 
             private static readonly bool _isRealFuelsLoadedCorrectly;
             private static readonly bool _isRP0LoadedCorrectly;
@@ -58,20 +58,6 @@ namespace MechJebLibBindings.FuelFlowSimulation
             internal SimVesselBuilder(SimVesselManager manager)
             {
                 _manager = manager;
-            }
-
-            internal void UpdateEngineSet()
-            {
-                foreach (SimPart part in _vessel.Parts)
-                {
-                    foreach (SimPartModule m in part.Modules)
-                    {
-                        if (m is SimModuleEngines e)
-                            _vessel.EnginesDroppedInStage[part.DecoupledInStage].Add(e);
-                        if (m is SimModuleRCS r)
-                            _vessel.RCSDroppedInStage[part.DecoupledInStage].Add(r);
-                    }
-                }
             }
 
             internal void UpdateLinks()
@@ -148,7 +134,6 @@ namespace MechJebLibBindings.FuelFlowSimulation
                 part.IsRoot = kspPart.parent is null;
                 part.ModulesStagedMass = GetModuleMass(kspPart, kspPart.prefabMass, ModifierStagingSituation.STAGED);
                 part.ModulesUnstagedMass = GetModuleMass(kspPart, kspPart.prefabMass, ModifierStagingSituation.UNSTAGED);
-                part.DecoupledInStage = int.MinValue;
 
                 HandleCrewMass(part, kspPart);
 
@@ -159,11 +144,14 @@ namespace MechJebLibBindings.FuelFlowSimulation
 
             private void BuildModules(SimPart part, Part kspPart)
             {
-                foreach (PartModule kspModule in kspPart.Modules)
+                for (int i = 0; i < kspPart.Modules.Count; i++)
                 {
+                    PartModule kspModule = kspPart.Modules[i];
+
                     if (!TryBuildModule(part, kspModule, out SimPartModule? m))
                         continue;
 
+                    m.Index = i;
                     part.Modules.Add(m);
                     _inversePartModuleMapping.Add(m, kspModule);
                 }
@@ -256,8 +244,6 @@ namespace MechJebLibBindings.FuelFlowSimulation
                     engine.Propellants.Add(new SimPropellant(p.id, p.ignoreForIsp, p.ratio, (SimFlowMode)p.GetFlowMode(),
                         PartResourceLibrary.Instance.GetDefinition(p.id).density));
 
-                _vessel.EnginesActivatedInStage[kspEngine.part.inverseStage].Add(engine);
-
                 part.IsThrottleLocked = kspEngine.throttleLocked;
                 part.IsEngine = true;
 
@@ -295,8 +281,6 @@ namespace MechJebLibBindings.FuelFlowSimulation
                 foreach (Propellant p in kspModuleRCS.propellants)
                     rcs.Propellants.Add(new SimPropellant(p.id, p.ignoreForIsp, p.ratio, (SimFlowMode)p.GetFlowMode(),
                         PartResourceLibrary.Instance.GetDefinition(p.id).density));
-
-                _vessel.RCSActivatedInStage[kspModuleRCS.part.inverseStage].Add(rcs);
 
                 return rcs;
             }

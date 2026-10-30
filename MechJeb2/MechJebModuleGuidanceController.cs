@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright Lamont Granquist (lamont@scriptkiddie.org)
  * Dual licensed under the MIT (MIT-LICENSE) license
  * and GPLv2 (GPLv2-LICENSE) license or any later version.
@@ -72,7 +72,7 @@ namespace MuMech
         protected override void OnModuleDisabled()
         {
             Debug.Log("MechJebModuleGuidanceController: Disabled");
-            Core.Attitude.attitudeDeactivate();
+            Core.Attitude.AttitudeDeactivate();
             if (!Core.RssMode)
                 Core.Thrust.ThrustOff();
             Core.Thrust.Users.Remove(this);
@@ -325,9 +325,19 @@ namespace MuMech
                     RCSOn();
 
                 ThrustOff();
+
+                // We have to cut throttle precisely when a coast is planned in order to not overshoot.  If we have a relightable
+                // engine at that point we need to jettison it manually and auto-staging will not do that.  The gate here obviously
+                // should not do a jettison for coast-after/during because the stages should match, this affects coast-before/dedicated.
+                if (Vessel.currentStage > coastStage)
+                    Core.Staging.Stage();
             }
             else
             {
+                // FIXME: edge trigger this instead of beating on it constantly
+                if (hasCoasted)
+                    Core.PSGSimulation.MarkCoastDone();
+
                 ThrottleOn();
 
                 Status = PSGStatus.BURNING;

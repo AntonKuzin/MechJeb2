@@ -8,32 +8,22 @@ using System.Collections.Generic;
 using MechJebLib.Functions;
 using MechJebLib.Maneuvers;
 using MechJebLib.Primitives;
-using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MechJebLibTest.ManeuversTests
 {
     public class ChangeOrbitalElementTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public ChangeOrbitalElementTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
         public static IEnumerable<object[]> Seeds()
         {
             for (int i = 0; i <= 50; i++)
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void ChangeOrbitalElementTest(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             var random = new Random(seed);
 
             var r = new V3(4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2);

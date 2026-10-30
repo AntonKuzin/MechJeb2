@@ -29,21 +29,21 @@ namespace MuMech.AttitudeControllers
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public bool UseInertia = true;
 
-        private Vector3d _actuation = Vector3d.zero;
-        private Vector3d _targetTorque = Vector3d.zero;
-        private Vector3d _omega = Vector3d.zero;
+        internal Vector3d _actuation = Vector3d.zero;
+        internal Vector3d _targetTorque = Vector3d.zero;
+        internal Vector3d _omega = Vector3d.zero;
 
         /* error */
         private double _phiTotal;
 
         /* error in pitch, roll, yaw */
-        private Vector3d _phiVector = Vector3d.zero;
-        private Vector3d _targetOmega = Vector3d.zero;
+        internal Vector3d _phiVector = Vector3d.zero;
+        internal Vector3d _targetOmega = Vector3d.zero;
 
         /* max angular rotation */
-        private Vector3d _maxOmega = Vector3d.zero;
+        internal Vector3d _maxOmega = Vector3d.zero;
 
-        private Vector3d _controlTorque => Ac.torque;
+        internal Vector3d _controlTorque => Ac.Torque;
 
         public HybridController(MechJebModuleAttitudeController controller) : base(controller)
         {
@@ -93,7 +93,7 @@ namespace MuMech.AttitudeControllers
             phi.Scale(Ac.AxisControl);
 
             if (UseInertia)
-                phi -= Ac.inertia;
+                phi -= Ac.Inertia;
 
             _phiVector = phi;
         }
@@ -204,7 +204,7 @@ namespace MuMech.AttitudeControllers
 
             GUILayout.BeginHorizontal();
             GUILayout.Label(Localizer.Format("#MechJeb_HybridController_label6"), GuiUtils.LayoutExpandWidth); //"Inertia"
-            GUILayout.Label("|" + Ac.inertia.magnitude.ToString("F3") + "| " + MuUtils.PrettyPrint(Ac.inertia), GuiUtils.LayoutNoExpandWidth);
+            GUILayout.Label("|" + Ac.Inertia.magnitude.ToString("F3") + "| " + MuUtils.PrettyPrint(Ac.Inertia), GuiUtils.LayoutNoExpandWidth);
             GUILayout.EndHorizontal();
         }
     }

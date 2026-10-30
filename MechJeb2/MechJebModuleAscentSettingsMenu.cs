@@ -6,16 +6,25 @@ namespace MuMech
 {
     public class MechJebModuleAscentSettingsMenu : DisplayModule
     {
-        public MechJebModuleAscentSettingsMenu(MechJebCore core) : base(core)
+        public MechJebModuleAscentSettingsMenu(MechJebCore core) : base(core) { }
+
+        public override bool ShowInMenu => false;
+
+        private  MechJebModuleAscentSettings      _ascentSettings => Core.AscentSettings;
+        internal MechJebModuleAscentBaseAutopilot _autopilot      => Core.Ascent;
+
+        internal readonly string _climbString = $"{CachedLocalizer.Instance.MechJebAscentLabel22}: ";
+        internal readonly string _turnString = $"{CachedLocalizer.Instance.MechJebAscentLabel23}: ";
+
+        // PSG manages the throttle itself (shared with the new UI, which calls it every frame the window is shown)
+        internal void ForcePsgThrustLimits()
         {
-            Hidden = true;
+            if (_ascentSettings.AscentType == AscentType.PSG)
+            {
+                Core.Thrust.LimitThrottle = false;
+                Core.Thrust.ElectricThrottle = false;
+            }
         }
-
-        private MechJebModuleAscentSettings      _ascentSettings => Core.AscentSettings;
-        private MechJebModuleAscentBaseAutopilot _autopilot      => Core.Ascent;
-
-        private readonly string _climbString = $"{CachedLocalizer.Instance.MechJebAscentLabel22}: ";
-        private readonly string _turnString = $"{CachedLocalizer.Instance.MechJebAscentLabel23}: ";
 
         private void ShowAscentSettingsGUIElements()
         {
@@ -29,11 +38,7 @@ namespace MuMech
             Core.Thrust.LimiterMinThrottleInfoItem();
             if (_ascentSettings.AscentType != AscentType.PSG) Core.Thrust.LimitElectricInfoItem();
 
-            if (_ascentSettings.AscentType == AscentType.PSG)
-            {
-                Core.Thrust.LimitThrottle = false;
-                Core.Thrust.ElectricThrottle = false;
-            }
+            ForcePsgThrustLimits();
 
             _ascentSettings.ForceRoll = GUILayout.Toggle(_ascentSettings.ForceRoll, CachedLocalizer.Instance.MechJebAscentCheckbox2); //Force Roll
             if (_ascentSettings.ForceRoll)
@@ -65,8 +70,6 @@ namespace MuMech
                         sl); //Dynamic Pressure Fadeout
                     GUILayout.EndHorizontal();
                 }
-
-                _ascentSettings.LimitQaEnabled = false; // this is only for PSG
             }
 
             if (_ascentSettings.AscentType == AscentType.CLASSIC)
@@ -96,11 +99,6 @@ namespace MuMech
             {
                 _ascentSettings.SkipCircularization =
                     GUILayout.Toggle(_ascentSettings.SkipCircularization, CachedLocalizer.Instance.MechJebAscentCheckbox9); //Skip Circularization
-            }
-            else
-            {
-                // skipCircularization is always true for Optimizer
-                _ascentSettings.SkipCircularization = true;
             }
 
             GUILayout.EndHorizontal();

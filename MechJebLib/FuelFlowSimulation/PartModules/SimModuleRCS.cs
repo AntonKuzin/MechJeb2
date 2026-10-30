@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
  * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
@@ -14,7 +14,7 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
 {
     public class SimModuleRCS : SimPartModule
     {
-        private static readonly ObjectPool<SimModuleRCS> _pool = new ObjectPool<SimModuleRCS>(New, Clear);
+        private static readonly ObjectPool<SimModuleRCS> _pool = new ObjectPool<SimModuleRCS>(New, m => m.Clear());
         public readonly List<SimPropellant> Propellants = new List<SimPropellant>();
         public readonly Dictionary<int, SimFlowMode> PropellantFlowModes = new Dictionary<int, SimFlowMode>();
         public readonly Dictionary<int, double> ResourceConsumptions = new Dictionary<int, double>();
@@ -123,12 +123,13 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
 
         public void Activate() => RcsEnabled = true;
 
-        private static void Clear(SimModuleRCS m)
+        protected override void Clear()
         {
-            m.Propellants.Clear();
-            m.PropellantFlowModes.Clear();
-            m.ResourceConsumptions.Clear();
-            m.AtmosphereCurve.Clear();
+            base.Clear();
+            Propellants.Clear();
+            PropellantFlowModes.Clear();
+            ResourceConsumptions.Clear();
+            AtmosphereCurve.Clear();
         }
 
         // FIXME: direct copypasta from SimModuleEngines
@@ -190,12 +191,12 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             var sb = new StringBuilder();
             sb.AppendLine(ModuleLine("SimModuleRCS", CommonFieldList()));
             sb.AppendLine(Invariant(
-                $"  G={G} Isp={Isp} Thrust={Thrust} RcsEnabled={RcsEnabled} ISPMult={ISPMult} ThrustPercentage={ThrustPercentage} MaxFuelFlow={MaxFuelFlow} MassFlowRate={MassFlowRate}"));
+                $"  G={G:G17} Isp={Isp:G17} Thrust={Thrust:G17} RcsEnabled={RcsEnabled} ISPMult={ISPMult:G17} ThrustPercentage={ThrustPercentage:G17} MaxFuelFlow={MaxFuelFlow:G17} MassFlowRate={MassFlowRate:G17}"));
             sb.AppendLine(Invariant($"  AtmosphereCurve: {AtmosphereCurve}"));
             sb.Append("  Propellants:");
             foreach (SimPropellant p in Propellants)
                 sb.Append(Invariant(
-                    $" [id={p.id} ignoreForIsp={p.ignoreForIsp} ratio={p.ratio} flowMode={p.FlowMode} density={p.density}]"));
+                    $" [id={p.id} ignoreForIsp={p.ignoreForIsp} ratio={p.ratio:G17} flowMode={p.FlowMode} density={p.density:G17}]"));
             return sb.ToString();
         }
     }

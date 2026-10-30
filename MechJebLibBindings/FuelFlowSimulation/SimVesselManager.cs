@@ -55,12 +55,16 @@ namespace MechJebLibBindings.FuelFlowSimulation
             _builder.UpdateCrossFeedSet();
             _builder.UpdateSymmetryParts();
             DecouplingAnalyzer.Analyze(_vessel);
-            _builder.UpdateEngineSet();
+            _vessel.UpdateEngineSet();
         }
 
         public void PrintVessel() => Print($"{_vessel}");
 
-        public void Update() => _updater.Update();
+        public void Update()
+        {
+            _updater.Update();
+            // PrintVessel();
+        }
 
         public void SetConditions(double atmDensity, double atmPressure, double machNumber) =>
             _vessel.SetConditions(atmDensity, atmPressure, machNumber);
@@ -84,8 +88,11 @@ namespace MechJebLibBindings.FuelFlowSimulation
 
         public void Release()
         {
+            FuelFlowSimulation.CancelAndReset();
             Clear();
             _vessel.Dispose();
+            _vessel = SimVessel.Borrow();
+            _kspVessel = null!;
         }
     }
 }

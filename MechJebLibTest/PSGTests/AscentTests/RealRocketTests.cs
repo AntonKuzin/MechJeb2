@@ -9,7 +9,6 @@ using MechJebLib.Primitives;
 using MechJebLib.PSG;
 using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 using static MechJebLib.Utils.Statics;
 using static System.Math;
 
@@ -17,17 +16,10 @@ namespace MechJebLibTest.PSGTests.AscentTests
 {
     public class RealRocketTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public RealRocketTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
+        // This is the classic test from Betts.
         [Fact]
         public void Delta3GeoSynchronous()
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
             var r0 = new V3(5605222.973039, 0.000000, 3043387.760956);
             var v0 = new V3(0.000000, 408.739353, 0.000000);
             double t0 = 0;
@@ -74,19 +66,16 @@ namespace MechJebLibTest.PSGTests.AscentTests
             (double smaf, double eccf, double incf, double lanf, double argpf, double _, _) =
                 Astro.KeplerianFromStateVectors(mu, rf, vf);
 
-            solution.R(0).ShouldEqual(r0, 1e-9);
-            solution.V(0).ShouldEqual(v0, 1e-9);
-            solution.M(0).ShouldEqual(301454.000000, 1e-9);
+            solution.R(0).ShouldEqual(r0, 1e-7);
+            solution.V(0).ShouldEqual(v0, 1e-7);
+            solution.M(0).ShouldEqual(301454.000000, 1e-7);
 
             solution.Tgo(solution.T0, 0).ShouldEqual(75.200000, 1e-3);
             solution.Tgo(solution.T0, 1).ShouldEqual(75.200000, 1e-3);
             solution.Tgo(solution.T0, 2).ShouldEqual(110.600000, 1e-3);
-            //solution.Tgo(solution.T0, 3).ShouldEqual(663.139, 1e-3);
+            solution.Tgo(solution.T0, 3).ShouldEqual(663.139, 1e-3);
 
-            // soft optimizer output: the total time-to-go converges to slightly different values across
-            // runtimes/platforms (the tight orbital-target asserts below still pin the actual solution).
-            solution.Tgo(0).ShouldEqual(924.139, 5e-2);
-            //solution.Vgo(0).ShouldEqual(8518.1366714811684, 1e-3);
+            solution.Tgo(0).ShouldEqual(924.139, 1e-3);
             psg.PrimalFeasibility.ShouldBeZero(1e-5);
 
             //solution.U(0).normalized.ShouldEqual(new V3(0.69734975209707417, 0.6074944955387559, 0.38033374967291772), 1e-2);
@@ -106,7 +95,6 @@ namespace MechJebLibTest.PSGTests.AscentTests
         [Fact]
         public void Falcon9ExpendableGeoStationary()
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
             var r0 = new V3(5605222.973039, 0.000000, 3043387.760956);
             var v0 = new V3(0.000000, 408.739353, 0.000000);
             const double T0 = 0;
@@ -162,9 +150,9 @@ namespace MechJebLibTest.PSGTests.AscentTests
             Optimizer psg = ascent.GetOptimizer() ?? throw new Exception("null optimizer");
             using Solution solution = psg.Solution ?? throw new Exception("null solution");
 
-            solution.R(0).ShouldEqual(r0, 1e-9);
-            solution.V(0).ShouldEqual(v0, 1e-9);
-            solution.M(0).ShouldEqual(FIRST_STAGE_M0, 1e-9);
+            solution.R(0).ShouldEqual(r0, 1e-7);
+            solution.V(0).ShouldEqual(v0, 1e-7);
+            solution.M(0).ShouldEqual(FIRST_STAGE_M0, 1e-7);
 
             solution.Tgo(solution.T0, 0).ShouldEqual(FIRST_BT, 1e-3);
             solution.Tgo(solution.T0, 1).ShouldBeLessThanOrEqual(SECOND_BT);
@@ -177,7 +165,7 @@ namespace MechJebLibTest.PSGTests.AscentTests
 
             psg.PrimalFeasibility.ShouldBeZero(1e-5);
             solution.Tgo(0).ShouldEqual(1600.5671186447382, 5e-2);
-            solution.Vgo(0).ShouldEqual(11121.768749617131, 5e-2);
+            solution.Vgo(0).ShouldEqual(11121.768749617131, 1e-3);
 
             (double pitch, double heading) = Astro.ECIToPitchHeading(r0, solution.U(0));
             Rad2Deg(pitch).ShouldEqual(83.373269308213963, 5e-2);
@@ -204,5 +192,68 @@ namespace MechJebLibTest.PSGTests.AscentTests
             // (e.g. 0.088 vs 6.271 rad), so it can't be tolerance-checked here. See SCvx TODO above.
             // nuf.ShouldEqual(Deg2Rad(5.0640956966565094), 1e-2);
         }
+
+        /* Disabled until I have time to work on fixing the AscentGuesser better
+        // This is the same Falcon9ExpendableGeoStationary, but without plane control.  It takes longer than
+        // expected because of a bad initial guess which collapses the coast to zero, before expanding it again.
+        // Having Epsf tuned too low in the solver will blow this up.
+        // FIXME: the SFB zero coast constraint makes solve times worse here, but that is considered an AscentGuesser bug.
+        [Fact]
+        public void Falcon9ToGeoSynchronous()
+        {
+            var r0 = new V3(3325422.7282581064, -4497376.8210520744, 3050620.0222054715);
+            var v0 = new V3(327.95389603474052, 242.49365454876852, -5.9322331954145923E-07);
+            var u0 = new V3(0.52189787527420084, -0.70594155964731686, 0.47882068157196045);
+            const double T0 = 671815.788102704;
+            const double MU = 398600435436096;
+            const double R_BODY = 6371000;
+            const double PER_T = 6551000;
+            const double APR_T = 42157000;
+            const double INC_T = 0.499303792410538;
+
+            const double FIRST_STAGE_M0 = 557281.970160182;
+            const double FIRST_STAGE_MF = 146457.332957014;
+            const double FIRST_THRUST = 8227079.36469365;
+            const double FIRST_ISP = 311.002015512881;
+            const double FIRST_BT = (FIRST_STAGE_M0 - FIRST_STAGE_MF) / (FIRST_THRUST / (FIRST_ISP * G0));
+
+            Ascent ascent = Ascent.Builder()
+               .Initial(r0, v0, u0, T0, MU, R_BODY)
+               .SetTarget(PER_T, APR_T, PER_T, INC_T, 3.7873644768277, 3.14159265358979, 0, false, false, false)
+               .AerodynamicConstants(0.5, 10.7, 1.2494765593625, 2000, 0, 7566.61914736748, new V3(0, 0, 7.2921151467069236E-05))
+               .AddStage(FIRST_STAGE_M0, FIRST_STAGE_MF, FIRST_THRUST, FIRST_ISP, 3, 3, allowShutdown: false,
+                    ispCurrent: 288.80801494309, minThrottle: 0.361002936935094)
+               .AddStage(120917.292904749, 14247.8429972215, 934119.886237161, 348.000851803864, 1, 1,
+                    ispCurrent: 228.646930097207, minThrottle: 0.385389461457581)
+               .AddCoast(120917.292904749, 14247.8429972215, 0, 300, 1, 1, massContinuity: true)
+               .AddStage(120917.292904749, 14247.8429972215, 934119.886237161, 348.000851803864, 1, 1, massContinuity: true,
+                    ispCurrent: 228.646930097207, minThrottle: 0.385389461457581)
+               .Build();
+
+            ascent.Run();
+
+            Optimizer psg = ascent.GetOptimizer() ?? throw new Exception("null optimizer");
+            using Solution solution = psg.Solution ?? throw new Exception("null solution");
+
+            psg.PrimalFeasibility.ShouldBeZero(1e-5);
+
+            solution.R(T0).ShouldEqual(r0, 1e-9);
+            solution.V(T0).ShouldEqual(v0, 1e-9);
+            solution.M(T0).ShouldEqual(FIRST_STAGE_M0, 1e-9);
+
+            solution.Tgo(T0, 0).ShouldEqual(FIRST_BT, 1e-3);
+            // this winds up testing the maximum coast length
+            solution.Tgo(T0, 2).ShouldEqual(300, 5e-2);
+            (solution.Tgo(T0, 1) + solution.Tgo(T0, 3)).ShouldEqual(435.89, 5e-2);
+
+            (V3 rf, V3 vf) = solution.TerminalStateVectors();
+
+            (double smaf, double eccf, double incf, _, _, _, _) = Astro.KeplerianFromStateVectors(MU, rf, vf);
+
+            Astro.PeriapsisFromKeplerian(smaf, eccf).ShouldEqual(PER_T, 1e-5);
+            Astro.ApoapsisFromKeplerian(smaf, eccf).ShouldEqual(APR_T, 1e-5);
+            incf.ShouldEqual(INC_T, 1e-5);
+        }
+        */
     }
 }

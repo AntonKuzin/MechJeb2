@@ -19,25 +19,27 @@ namespace MuMech
         [EditableInfoItem("#MechJeb_HoverslamIgnitionLead", InfoItem.Category.Hoverslam, width = 50, rightLabel = "s", expandWidth = true, tooltip = "#MechJeb_HoverslamIgnitionLead_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //Ignition lead
         public readonly EditableDouble IgnitionLead = new EditableDouble(0.0);
 
-        [EditableInfoItem("#MechJeb_HoverslamTouchdownSpeed", InfoItem.Category.Hoverslam, width = 50, rightLabel = "m/s", expandWidth = true, tooltip = "#MechJeb_HoverslamTouchdownSpeed_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-        //Touchdown speed
+        [EditableInfoItem("#MechJeb_HoverslamTouchdownSpeed", InfoItem.Category.Hoverslam, width = 50, rightLabel = "m/s", expandWidth = true, tooltip = "#MechJeb_HoverslamTouchdownSpeed_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //Touchdown speed
         public readonly EditableDouble TouchdownSpeed = new EditableDouble(0);
 
-        [ToggleInfoItem("#MechJeb_HoverslamAutoWarp", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamAutoWarp_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-        //Hoverslam auto-warp
+        [ToggleInfoItem("#MechJeb_HoverslamAutoWarp", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamAutoWarp_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //Hoverslam auto-warp
         public bool AutoWarp = true;
 
-        [ToggleInfoItem("#MechJeb_HoverslamHoldUpright", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamHoldUpright_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-        //Hold upright after touchdown
+        [ToggleInfoItem("#MechJeb_HoverslamHoldUpright", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamHoldUpright_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //Hold upright after touchdown
         public bool HoldUpright;
 
+        [ToggleInfoItem("#MechJeb_HoverslamAutostage", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamAutostage_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //Autostage while the autopilot is engaged
+        public bool Autostage = true;
+
         [ValueInfoItem("#MechJeb_HoverslamState", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamState_tooltip")] //Hoverslam state
-        public string HoverslamState => !Enabled ? "Disabled" : _state.ToString();
+        public string HoverslamState => TechLocked ? "Locked" : !Enabled ? "Disabled" : _state.ToString();
+
+        // tech-gated (unlockTechs in the part cfgs) and gated on the tracking station the same as MechJebModuleLandingGuidance
+        protected override bool IsSpaceCenterUpgradeUnlocked() => Vessel.patchedConicsUnlocked();
 
         private const double DEFAULT_MIN_ON_TIME = 0.50;
 
-        [EditableInfoItem("#MechJeb_HoverslamPWMPulseWidth", InfoItem.Category.Hoverslam, width = 50, rightLabel = "s", expandWidth = true, tooltip = "#MechJeb_HoverslamPWMTimeWidth_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-        //PWM time width
+        [EditableInfoItem("#MechJeb_HoverslamPWMPulseWidth", InfoItem.Category.Hoverslam, width = 50, rightLabel = "s", expandWidth = true, tooltip = "#MechJeb_HoverslamPWMTimeWidth_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))] //PWM time width
         public readonly EditableDouble PWMPulseWidth = new EditableDouble(DEFAULT_MIN_ON_TIME);
 
         protected override void OnModuleEnabled()
@@ -45,6 +47,7 @@ namespace MuMech
             Reset();
             Core.Thrust.Users.Add(this);
             Core.Attitude.Users.Add(this);
+            if (Autostage) Core.Staging.Users.Add(this);
             TransitionTo(DetermineState(State.Align));
         }
 
@@ -55,6 +58,7 @@ namespace MuMech
             Core.Thrust.ThrustOff();
             Core.Thrust.Users.Remove(this);
             Core.Attitude.Users.Remove(this);
+            Core.Staging.Users.Remove(this);
         }
 
         private void Reset() => _lastAdjV = new Vector3d(double.NaN, double.NaN, double.NaN);
@@ -145,7 +149,7 @@ namespace MuMech
 
         private void TickAligning()
         {
-            Core.Attitude.attitudeTo(Core.Hoverslam.IgnitionAttitude, AttitudeReference.INERTIAL_COT, this);
+            Core.Attitude.AttitudeTo(Core.Hoverslam.IgnitionAttitude, AttitudeReference.INERTIAL_COT, this);
             if (!MuUtils.PhysicsRunning() && VesselState.Time + TimeWarp.fixedDeltaTime > Core.Hoverslam.IgnitionUT)
                 Core.Warp.MinimumWarp(true);
         }
@@ -154,7 +158,7 @@ namespace MuMech
 
         private void TickCoast()
         {
-            Core.Attitude.attitudeTo(Core.Hoverslam.IgnitionAttitude, AttitudeReference.INERTIAL_COT, this);
+            Core.Attitude.AttitudeTo(Core.Hoverslam.IgnitionAttitude, AttitudeReference.INERTIAL_COT, this);
             if (AutoWarp)
                 Core.Warp.WarpToUT(Core.Hoverslam.IgnitionUT);
             else if (!MuUtils.PhysicsRunning() && VesselState.Time + TimeWarp.fixedDeltaTime > Core.Hoverslam.IgnitionUT)
@@ -163,12 +167,12 @@ namespace MuMech
 
         private void OnEnterBurn() => Core.Thrust.TargetThrottle = 1.0f;
 
-        private void TickBurn() => Core.Attitude.attitudeTo(-_adjV, AttitudeReference.INERTIAL_COT, this);
+        private void TickBurn() => Core.Attitude.AttitudeTo(-_adjV, AttitudeReference.INERTIAL_COT, this);
 
         private void OnEnterFinalDescent()
         {
             _pwm.Reset();
-            Core.Attitude.attitudeTo(Vector3d.back, AttitudeReference.SURFACE_VELOCITY, this);
+            Core.Attitude.AttitudeTo(Vector3d.back, AttitudeReference.SURFACE_VELOCITY, this);
         }
 
         private readonly DeltaSigmaThrottleModulator _pwm = new DeltaSigmaThrottleModulator(0.02, DEFAULT_MIN_ON_TIME);
@@ -176,7 +180,7 @@ namespace MuMech
         private void TickFinalDescent()
         {
             if (Vector3d.Dot(VesselState.SurfaceVelocity, VesselState.Up) >= -1.0)
-                Core.Attitude.attitudeTo(Vector3d.up, AttitudeReference.SURFACE_NORTH, this);
+                Core.Attitude.AttitudeTo(Vector3d.up, AttitudeReference.SURFACE_NORTH, this);
 
             double v2 = VesselState.SurfaceVelocity.sqrMagnitude;
             double g = Vessel.graviticAcceleration.magnitude;
@@ -187,7 +191,11 @@ namespace MuMech
 
             _pwm.MinOnTime = PWMPulseWidth;
             _pwm.MinOffTime = TimeWarp.fixedDeltaTime;
-            Core.Thrust.TargetThrottle = _pwm.ThrottleCommand(accel, VesselState.MinThrustAcceleration, VesselState.MaxThrustAcceleration, TimeWarp.fixedDeltaTime);
+            float throttle = _pwm.ThrottleCommand(accel, VesselState.MinThrustAcceleration, VesselState.MaxThrustAcceleration, TimeWarp.fixedDeltaTime);
+            if (throttle > 0)
+                Core.Thrust.TargetThrottle = throttle;
+            else
+                Core.Thrust.ThrustOff();
         }
 
         private void OnEnterFinished()

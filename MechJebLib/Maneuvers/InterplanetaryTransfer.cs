@@ -1,8 +1,12 @@
-﻿using System;
+/*
+ * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
+ * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
+ */
+
+using System;
 using System.Linq;
 using MechJebLib.Functions;
 using MechJebLib.Lambert;
-using MechJebLib.Maths;
 using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
 using MechJebLib.Utils;
@@ -25,9 +29,14 @@ namespace MechJebLib.Maneuvers
         private double _cosInc;
         private bool _captureBurn;
 
-        private TransferGeometry _direction1;
-        private TransferGeometry _direction2;
         private bool _initialFeasibility;
+
+        /// <summary>
+        ///     The inclination that Maneuver() targeted, which is the requested inclination clamped to be at least
+        ///     INC_CLAMP_MARGIN further from equatorial than the declination of the arrival v-infinity (NaN if no
+        ///     inclination was requested).
+        /// </summary>
+        public double TargetInc { get; private set; } = double.NaN;
 
         private Scale _sourceScale;
         private Scale _targetScale;
@@ -37,20 +46,22 @@ namespace MechJebLib.Maneuvers
 
         private void NLPFunctionColumn(Dual[] x, double[] fi, double[,] jac, int i)
         {
-            DualV3 rsoi1, vsoi1, rsoi2, vsoi2, dv1, dv2, dv3, dv4;
+            DualV3 rsoi1, vsoi1, rsoi2, vsoi2, dv1, dv2, dv3, dv4, dv5;
 
             try
             {
-                (rsoi1, vsoi1, rsoi2, vsoi2, dv1, dv2, dv3, dv4) = EvaluateTrajectory(x);
+                (rsoi1, vsoi1, rsoi2, vsoi2, dv1, dv2, dv3, dv4, dv5) = EvaluateTrajectory(x);
             }
-            catch (Exception)
+            catch (Exception) // FIXME: Exception types for the Lambert solvers and catch specific ones here
             {
+                // The SQP solver can wander into bad parameter spaces of the Lambert solver, and this
+                // value causes alglib to back off.
                 fi[0] = 1e300;
                 return;
             }
 
             Dual fi0 = 0.5 * dv1.sqrMagnitude;
-            if (IsFinite(_peR) && _soi1 > 0 && _captureBurn)
+            if (IsFinite(_peR) && _soi2 > 0 && _captureBurn)
             {
                 Dual sma = Astro.SmaFromStateVectors(1.0, rsoi2, vsoi2);
                 Dual dv = Astro.VelocityFromRadiusSMA(1.0, _peR, sma) - Astro.CircularVelocity(1.0, _peR);
@@ -60,7 +71,7 @@ namespace MechJebLib.Maneuvers
             fi[0] = fi0.M;
             jac[0, i] = fi0.D;
 
-            if (IsFinite(_peR) && _soi1 > 0)
+            if (IsFinite(_peR) && _soi2 > 0)
             {
                 Dual periapsis = Astro.PeriapsisFromStateVectors(1.0, rsoi2, vsoi2);
                 Dual fi1 = _peR > 0 ? periapsis / _peR - 1.0 : DualV3.Dot(rsoi2.normalized, vsoi2.normalized) + 1.0;
@@ -73,7 +84,7 @@ namespace MechJebLib.Maneuvers
                 jac[1, i] = 0;
             }
 
-            Dual fi2 = IsFinite(_cosInc) && IsFinite(_peR) && _peR > 0 && _soi1 > 0 ? DualV3.Cross(rsoi2, vsoi2).normalized.z - _cosInc : 0;
+            Dual fi2 = IsFinite(_cosInc) && IsFinite(_peR) && _peR > 0 && _soi2 > 0 ? DualV3.Cross(rsoi2, vsoi2).normalized.z - _cosInc : 0;
             fi[2] = fi2.M;
             jac[2, i] = fi2.D;
             fi[3] = dv2.x.M;
@@ -94,12 +105,18 @@ namespace MechJebLib.Maneuvers
             jac[10, i] = dv4.y.D;
             fi[11] = dv4.z.M;
             jac[11, i] = dv4.z.D;
-            Dual fi12 = -DualV3.Dot(rsoi1.normalized, vsoi1.normalized);
-            fi[12] = fi12.M;
-            jac[12, i] = fi12.D;
-            Dual fi13 = _soi2 == 0 ? new Dual(0) : DualV3.Dot(rsoi2.normalized, vsoi2.normalized);
-            fi[13] = fi13.M;
-            jac[13, i] = fi13.D;
+            fi[12] = dv5.x.M;
+            jac[12, i] = dv5.x.D;
+            fi[13] = dv5.y.M;
+            jac[13, i] = dv5.y.D;
+            fi[14] = dv5.z.M;
+            jac[14, i] = dv5.z.D;
+            Dual fi15 = -DualV3.Dot(rsoi1.normalized, vsoi1.normalized);
+            fi[15] = fi15.M;
+            jac[15, i] = fi15.D;
+            Dual fi16 = _soi2 == 0 ? new Dual(0) : DualV3.Dot(rsoi2.normalized, vsoi2.normalized);
+            fi[16] = fi16.M;
+            jac[16, i] = fi16.D;
 
             if (_initialFeasibility)
             {
@@ -121,14 +138,15 @@ namespace MechJebLib.Maneuvers
             }
         }
 
-        private (DualV3 rsoi1, DualV3 vsoi1, DualV3 rsoi2, DualV3 vsoi2, DualV3 dv1, DualV3 dv2, DualV3 dv3, DualV3 dv4) EvaluateTrajectory(Dual[] x)
+        private (DualV3 rsoi1, DualV3 vsoi1, DualV3 rsoi2, DualV3 vsoi2, DualV3 dv1, DualV3 dv2, DualV3 dv3, DualV3 dv4, DualV3 dv5) EvaluateTrajectory(Dual[] x)
         {
             if (x.Any(v => !IsFinite(v.M)))
                 throw new Exception("invalid value");
 
             Dual dt1 = x[0]; // coast time on initial orbit to burn (source scale)
             Dual dt2 = x[1]; // coast time after burn to soi1 interface (source scale)
-            Dual dt3 = x[2]; // coast time on heliocentric orbit (helio scale)
+            Dual dt3 = x[2]; // arrival time at destination soi (helio scale)
+            Dual heliocoast = dt3 - (dt1 + dt2) / _sourceToHelioScale.TimeScale; // coast time on heliocentric orbit (helio scale)
 
             var rsoiSph1 = new DualV3(_soi1, x[3], x[4]); // spherical position at soi1 boundary (source scale)
             var vsoiSph1 = new DualV3(x[5], x[6], x[7]); // spherical velocity at soi1 boundary (source scale)
@@ -136,8 +154,10 @@ namespace MechJebLib.Maneuvers
             DualV3 rsoi1 = rsoiSph1.sph2cart;
             DualV3 vsoi1 = vsoiSph1.sph2cart;
 
-            DualV3 rsoiSph2 = _soi2 == 0 ? new DualV3(0, 0, 0) : new DualV3(_soi2, x[8], x[9]); // spherical position at soi2 boundary (target scale)
-            var vsoiSph2 = new DualV3(x[10], x[11], x[12]); // spherical velocity at soi2 boundary (target scale)
+            var rmidHelio = new DualV3(x[8], x[9], x[10]); // heliocentric position at the midpoint of the heliocentric coast (helio scale)
+
+            DualV3 rsoiSph2 = _soi2 == 0 ? new DualV3(0, 0, 0) : new DualV3(_soi2, x[11], x[12]); // spherical position at soi2 boundary (target scale)
+            var vsoiSph2 = new DualV3(x[13], x[14], x[15]); // spherical velocity at soi2 boundary (target scale)
 
             DualV3 rsoi2 = rsoiSph2.sph2cart;
             DualV3 vsoi2 = vsoiSph2.sph2cart;
@@ -160,32 +180,34 @@ namespace MechJebLib.Maneuvers
             DualV3 vsoi2helio = v2soi2 + vsoi2 / _targetToHelioScale.VelocityScale;
 
             // solve from the burn to the soi1 interface
-            // (use prograde/retrograde sense of the initial parking orbit--shortway/longway produces issues--might need to pick some other
-            // axis if we hit issues)
-            (DualV3 vi1, DualV3 vf1) = Izzo.Solve(1.0, r0Burn, rsoi1, dt2, _direction1, rtol: 1e-12, h: V3.Cross(_r0, _v0));
+            // (this uses the prograde sense of the rsoi1 x vsoi1 plane, equivalent to the departure arc, which avoids lambert discontinuities)
+            (DualV3 vi1, DualV3 vf1) = Russell.Solve(1.0, r0Burn, rsoi1, dt2, TransferGeometry.Prograde, h: V3.Cross(rsoi1.M, vsoi1.M));
 
-            // solve the heliocentric trajectory from soi1 to soi2
-            // (this uses prograde/retrograde sense from the rsoi1helio x vsoi1helio plane since shortway/longway has a 180
-            // degree singularity that causes issues for SQP solvers and near-hohmann transfers)
-            (DualV3 vi2, DualV3 vf2) = Izzo.Solve(1.0, rsoi1helio, rsoi2helio, dt3 - (dt1 + dt2) / _sourceToHelioScale.TimeScale, _direction2, rtol: 1e-12, h: V3.Cross(rsoi1helio.M, vsoi1helio.M));
+            // solve the heliocentric trajectory from soi1 to soi2 as two equal-time legs through a free midpoint, so that
+            // neither leg sits on the 180 degree lambert singularity when the overall transfer angle is near 180 degrees
+            // (this uses prograde sense from the rsoi1helio x vsoi1helio plane, which avoids lambert discontinuities)
+            var hHelio = V3.Cross(rsoi1helio.M, vsoi1helio.M);
+            (DualV3 vi2, DualV3 vf2) = Russell.Solve(1.0, rsoi1helio, rmidHelio, 0.5 * heliocoast, TransferGeometry.Prograde, h: hHelio);
+            (DualV3 vi3, DualV3 vf3) = Russell.Solve(1.0, rmidHelio, rsoi2helio, 0.5 * heliocoast, TransferGeometry.Prograde, h: hHelio);
 
-            return (rsoi1, vsoi1, rsoi2, vsoi2, vi1 - v0Burn, vsoi1 - vf1, vsoi1helio - vi2, vf2 - vsoi2helio);
+            return (rsoi1, vsoi1, rsoi2, vsoi2, vi1 - v0Burn, vsoi1 - vf1, vsoi1helio - vi2, vi3 - vf2, vf3 - vsoi2helio);
         }
 
-        private (V3 rsoi1, V3 vsoi1, V3 rsoi2, V3 vsoi2, V3 dv1, V3 dv2, V3 dv3, V3 dv4) EvaluateTrajectory(double[] x)
+        private (V3 rsoi1, V3 vsoi1, V3 rsoi2, V3 vsoi2, V3 dv1, V3 dv2, V3 dv3, V3 dv4, V3 dv5) EvaluateTrajectory(double[] x)
         {
             for (int j = 0; j < x.Length; j++)
                 _duals[j] = new Dual(x[j]);
 
-            (DualV3 rsoi1, DualV3 vsoi1, DualV3 rsoi2, DualV3 vsoi2, DualV3 dv1, DualV3 dv2, DualV3 dv3, DualV3 dv4) = EvaluateTrajectory(_duals);
+            (DualV3 rsoi1, DualV3 vsoi1, DualV3 rsoi2, DualV3 vsoi2, DualV3 dv1, DualV3 dv2, DualV3 dv3, DualV3 dv4, DualV3 dv5) = EvaluateTrajectory(_duals);
 
-            return (rsoi1.M, vsoi1.M, rsoi2.M, vsoi2.M, dv1.M, dv2.M, dv3.M, dv4.M);
+            return (rsoi1.M, vsoi1.M, rsoi2.M, vsoi2.M, dv1.M, dv2.M, dv3.M, dv4.M, dv5.M);
         }
 
-        private const int NUM_EQUALITY_CONSTRAINTS = 11;
+        private const int NUM_EQUALITY_CONSTRAINTS = 14;
         private const int NUM_INEQUALITY_CONSTRAINTS = 2;
         private const int MAXITS = 5000;
-        private const int NVARIABLES = 13;
+        private const double INC_CLAMP_MARGIN = 2 * DEG2RAD;
+        private const int NVARIABLES = 16;
 
         public (V3 dv, double dt1, double dt2, double dt3) Maneuver(V3 r0, V3 v0, double mu1, V3 r1, V3 v1, double soi1, double mu2, V3 r2, V3 v2, double soi2, double mu3, double arrivalDT, double arrivalDTlower = 0, double arrivalDTupper = double.PositiveInfinity, double peR = double.PositiveInfinity, double inc = double.NaN, bool captureBurn = false, bool optguard = false)
         {
@@ -223,93 +245,69 @@ namespace MechJebLib.Maneuvers
             _r2 = r2 / _helioScale.LengthScale;
             _v2 = v2 / _helioScale.VelocityScale;
             _cosInc = Cos(inc);
+            TargetInc = inc;
             _captureBurn = captureBurn;
 
             // initialization
 
-            double[] x0short = new double[NVARIABLES];
-            double[] x0long = new double[NVARIABLES];
+            double[] x0 = new double[NVARIABLES];
 
             double arrivalUTscaled = arrivalDT / _helioScale.TimeScale;
 
             // propagate target celestial to soi2 intercept time
             (V3 r2soi2, V3 v2soi2) = Shepperd.Solve(1.0, arrivalUTscaled, _r2, _v2);
 
-            // solve the ZSOI heliocentric trajectory from source to target using both geometries
-            (V3 vishortBootstrap, V3 _) = Izzo.Solve(1.0, _r1, r2soi2, arrivalUTscaled, TransferGeometry.Prograde, h: V3.Cross(_r1, _v1));
-            (V3 vilongBootstrap, V3 _) = Izzo.Solve(1.0, _r1, r2soi2, arrivalUTscaled, TransferGeometry.Retrograde, h: V3.Cross(_r1, _v1));
+            // solve the ZSOI heliocentric trajectory from source to target
+            (V3 viBootstrap, V3 _) = Russell.Solve(1.0, _r1, r2soi2, arrivalUTscaled, TransferGeometry.Prograde, h: V3.Cross(_r1, _v1));
 
             // estimate travel time to the SOI boundary and propagate the source celestial
-            (V3 _, V3 vPosShortBootstrap, V3 rBurnShortBootstrap, double dt1ShortBootstrap) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, (vishortBootstrap - _v1) * _sourceToHelioScale.VelocityScale);
-            double dt2ShortBootstrap = Astro.TimeToNextRadius(1.0, rBurnShortBootstrap, vPosShortBootstrap, _soi1);
-            double dt1HelioShortBootstrap = (dt1ShortBootstrap + dt2ShortBootstrap) / _sourceToHelioScale.TimeScale;
-            (V3 r1soi1Short, V3 v1soi1Short) = Shepperd.Solve(1.0, dt1HelioShortBootstrap, _r1, _v1);
-
-            (V3 _, V3 vPosLongBootstrap, V3 rBurnLongBootstrap, double dt1LongBootstrap) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, (vilongBootstrap - _v1) * _sourceToHelioScale.VelocityScale);
-            double dt2LongBootstrap = Astro.TimeToNextRadius(1.0, rBurnLongBootstrap, vPosLongBootstrap, _soi1);
-            double dt1HelioLongBootstrap = (dt1LongBootstrap + dt2LongBootstrap) / _sourceToHelioScale.TimeScale;
-            (V3 r1soi1Long, V3 v1soi1Long) = Shepperd.Solve(1.0, dt1HelioLongBootstrap, _r1, _v1);
+            (V3 _, V3 vPosBootstrap, V3 rBurnBootstrap, double dt1Bootstrap) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, (viBootstrap - _v1) * _sourceToHelioScale.VelocityScale);
+            double dt2Bootstrap = Astro.TimeToNextRadius(1.0, rBurnBootstrap, vPosBootstrap, _soi1);
+            double dt1HelioBootstrap = (dt1Bootstrap + dt2Bootstrap) / _sourceToHelioScale.TimeScale;
+            (V3 r1soi1, V3 v1soi1) = Shepperd.Solve(1.0, dt1HelioBootstrap, _r1, _v1);
 
             // re-solve the ZSOI helicentric trajectory with estimated travel time to the first SOI boundary
-            (V3 vishort, V3 vfshort) = Izzo.Solve(1.0, r1soi1Short, r2soi2, arrivalUTscaled - dt1HelioShortBootstrap, TransferGeometry.Prograde, h: V3.Cross(r1soi1Short, v1soi1Short));
-            (V3 vilong, V3 vflong) = Izzo.Solve(1.0, r1soi1Long, r2soi2, arrivalUTscaled - dt1HelioLongBootstrap, TransferGeometry.Retrograde, h: V3.Cross(r1soi1Long, v1soi1Long));
+            (V3 vi, V3 vf) = Russell.Solve(1.0, r1soi1, r2soi2, arrivalUTscaled - dt1HelioBootstrap, TransferGeometry.Prograde, h: V3.Cross(r1soi1, v1soi1));
 
             // refine the ZSOI solution into finite SOI
-            (V3 _, V3 vsoi1short) = Astro.StateVectorsAtDistance(1.0, r1soi1Short, vishort, soi1 / _helioScale.LengthScale);
-            //(V3 rsoi2short, V3 vsoi2short) = Astro.StateVectorsAtDistance(1.0, r2soi2, -vfshort, soi2 / _helioScale.LengthScale);
+            (V3 _, V3 vsoi1) = Astro.StateVectorsAtDistance(1.0, r1soi1, vi, soi1 / _helioScale.LengthScale);
+            //(V3 rsoi2, V3 vsoi2) = Astro.StateVectorsAtDistance(1.0, r2soi2, -vf, soi2 / _helioScale.LengthScale);
 
-            (V3 _, V3 vsoi1long) = Astro.StateVectorsAtDistance(1.0, r1soi1Long, vilong, soi1 / _helioScale.LengthScale);
-            //(V3 rsoi2long, V3 vsoi2long) = Astro.StateVectorsAtDistance(1.0, r2soi2, -vflong, soi2 / _helioScale.LengthScale);
+            vsoi1 = ((vsoi1 - v1soi1) * _sourceToHelioScale.VelocityScale).cart2sph;
+            V3 vsoi2 = ((vf - v2soi2) * _targetToHelioScale.VelocityScale).cart2sph;
 
-            vsoi1short = ((vsoi1short - v1soi1Short) * _sourceToHelioScale.VelocityScale).cart2sph;
-            V3 vsoi2short = ((vfshort - v2soi2) * _targetToHelioScale.VelocityScale).cart2sph;
+            x0[11] = 0;
+            x0[12] = 0;
+            x0[13] = vsoi2.x;
+            x0[14] = vsoi2.y;
+            x0[15] = vsoi2.z;
 
-            vsoi1long = ((vsoi1long - v1soi1Long) * _sourceToHelioScale.VelocityScale).cart2sph;
-            V3 vsoi2long = ((vflong - v2soi2) * _targetToHelioScale.VelocityScale).cart2sph;
+            (V3 _, V3 vPos, V3 rBurn, double dt1) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, vsoi1.sph2cart);
+            double dt2 = Astro.TimeToNextRadius(1.0, rBurn, vPos, _soi1);
+            (V3 rsoiSph1, V3 vsoiSph1) = Shepperd.Solve(1.0, dt2, rBurn, vPos);
 
-            x0short[8] = 0;
-            x0short[9] = 0;
-            x0short[10] = vsoi2short.x;
-            x0short[11] = vsoi2short.y;
-            x0short[12] = vsoi2short.z;
+            // midpoint of the heliocentric coast from the soi1 exit point to the target, using the refined departure times
+            double dt12Helio = (dt1 + dt2) / _sourceToHelioScale.TimeScale;
+            (V3 r1exit, V3 v1exit) = Shepperd.Solve(1.0, dt12Helio, _r1, _v1);
+            V3 rexitHelio = r1exit + rsoiSph1 / _sourceToHelioScale.LengthScale;
+            V3 vexitHelio = v1exit + vsoiSph1 / _sourceToHelioScale.VelocityScale;
+            (V3 viExit, V3 _) = Russell.Solve(1.0, rexitHelio, r2soi2, arrivalUTscaled - dt12Helio, TransferGeometry.Prograde, h: V3.Cross(rexitHelio, vexitHelio));
+            (V3 rmidHelio, V3 _) = Shepperd.Solve(1.0, 0.5 * (arrivalUTscaled - dt12Helio), rexitHelio, viExit);
 
-            x0long[8] = 0;
-            x0long[9] = 0;
-            x0long[10] = vsoi2long.x;
-            x0long[11] = vsoi2long.y;
-            x0long[12] = vsoi2long.z;
+            rsoiSph1 = rsoiSph1.cart2sph;
+            vsoiSph1 = vsoiSph1.cart2sph;
 
-            (V3 _, V3 vPosShort, V3 rBurnShort, double dt1Short) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, vsoi1short.sph2cart);
-            double dt2Short = Astro.TimeToNextRadius(1.0, rBurnShort, vPosShort, _soi1);
-            (V3 rsoi1short2, V3 vsoi1short2) = Shepperd.Solve(1.0, dt2Short, rBurnShort, vPosShort);
-
-            rsoi1short2 = rsoi1short2.cart2sph;
-            vsoi1short2 = vsoi1short2.cart2sph;
-
-            x0short[0] = dt1Short;
-            x0short[1] = dt2Short;
-            x0short[2] = arrivalUTscaled;
-            x0short[3] = rsoi1short2.y;
-            x0short[4] = rsoi1short2.z;
-            x0short[5] = vsoi1short2.x;
-            x0short[6] = vsoi1short2.y;
-            x0short[7] = vsoi1short2.z;
-
-            (V3 _, V3 vPosLong, V3 rBurnLong, double dt1Long) = Astro.SingleImpulseHyperbolicBurn(1.0, _r0, _v0, vsoi1long.sph2cart);
-            double dt2Long = Astro.TimeToNextRadius(1.0, rBurnLong, vPosLong, _soi1);
-            (V3 rsoi1long2, V3 vsoi1long2) = Shepperd.Solve(1.0, dt2Short, rBurnLong, vPosLong);
-
-            rsoi1long2 = rsoi1long2.cart2sph;
-            vsoi1long2 = vsoi1long2.cart2sph;
-
-            x0long[0] = dt1Long;
-            x0long[1] = dt2Long;
-            x0long[2] = arrivalUTscaled;
-            x0long[3] = rsoi1long2.y;
-            x0long[4] = rsoi1long2.z;
-            x0long[5] = vsoi1long2.x;
-            x0long[6] = vsoi1long2.y;
-            x0long[7] = vsoi1long2.z;
+            x0[0] = dt1;
+            x0[1] = dt2;
+            x0[2] = arrivalUTscaled;
+            x0[3] = rsoiSph1.y;
+            x0[4] = rsoiSph1.z;
+            x0[5] = vsoiSph1.x;
+            x0[6] = vsoiSph1.y;
+            x0[7] = vsoiSph1.z;
+            x0[8] = rmidHelio.x;
+            x0[9] = rmidHelio.y;
+            x0[10] = rmidHelio.z;
 
             // box constraints
 
@@ -328,34 +326,21 @@ namespace MechJebLib.Maneuvers
             bndl[1] = EPS;
             bndl[2] = Max(arrivalDTlower / _helioScale.TimeScale, EPS);
             bndu[2] = arrivalDTupper / _helioScale.TimeScale;
-            bndl[10] = Sqrt(EPS);
+            bndl[13] = Sqrt(EPS);
 
-            // driving the optimizer with 4 different possible Lambert geometries
+            Solution sol;
+            try
+            {
+                sol = RunOptimizer(x0, bndl, bndu, optguard);
+            }
+            catch (alglib.alglibexception e)
+            {
+                // alglibexception never passes its message to the base constructor, so Message is useless
+                throw new Exception(e.msg, e);
+            }
 
-            var best = new Solution(V3.zero, 0.0, 0.0, 0.0, double.PositiveInfinity, double.PositiveInfinity);
-
-            _direction1 = TransferGeometry.Prograde;
-            _direction2 = TransferGeometry.Prograde;
-            Solution sol1 = RunOptimizer(x0short, bndl, bndu, optguard);
-            best = UpdateBestSolution(sol1, best);
-
-            _direction1 = TransferGeometry.Retrograde;
-            _direction2 = TransferGeometry.Prograde;
-            Solution sol2 = RunOptimizer(x0short, bndl, bndu, optguard);
-            best = UpdateBestSolution(sol2, best);
-
-            _direction1 = TransferGeometry.Prograde;
-            _direction2 = TransferGeometry.Retrograde;
-            Solution sol3 = RunOptimizer(x0long, bndl, bndu, optguard);
-            best = UpdateBestSolution(sol3, best);
-
-            _direction1 = TransferGeometry.Retrograde;
-            _direction2 = TransferGeometry.Retrograde;
-            Solution sol4 = RunOptimizer(x0long, bndl, bndu, optguard);
-            best = UpdateBestSolution(sol4, best);
-
-            Print($"dv: {best.dv * _sourceScale.VelocityScale} dt1: {best.dt1 * _sourceScale.TimeScale} dt2: {best.dt2 * _sourceScale.TimeScale}, dt3: {best.dt3 * _helioScale.TimeScale}");
-            return (best.dv * _sourceScale.VelocityScale, best.dt1 * _sourceScale.TimeScale, best.dt2 * _sourceScale.TimeScale, best.dt3 * _helioScale.TimeScale);
+            Print($"dv: {sol.dv * _sourceScale.VelocityScale} dt1: {sol.dt1 * _sourceScale.TimeScale} dt2: {sol.dt2 * _sourceScale.TimeScale}, dt3: {sol.dt3 * _helioScale.TimeScale}");
+            return (sol.dv * _sourceScale.VelocityScale, sol.dt1 * _sourceScale.TimeScale, sol.dt2 * _sourceScale.TimeScale, sol.dt3 * _helioScale.TimeScale);
         }
 
         private readonly struct Solution
@@ -378,33 +363,8 @@ namespace MechJebLib.Maneuvers
             }
         }
 
-        // if all the solutions are worse thn 1e-4 error, return the solution that has the best error.
-        // if any solutions are better than 1e-4 error, return the solution with the best cost out of those feasible solutions.
-        private static Solution UpdateBestSolution(Solution sol, Solution best)
+        private (double[] x, alglib.minnlcreport rep) RunPass(double[] x0, double[] bndl, double[] bndu, bool optguard)
         {
-            if (sol.err < 1e-4)
-            {
-                if (sol.cost < best.cost && sol.err < 1e-4)
-                    return sol;
-            }
-            else
-            {
-                if (sol.err < best.err)
-                    return sol;
-            }
-
-            return best;
-        }
-
-        private Solution RunOptimizer(double[] x0, double[] bndl, double[] bndu, bool optguard)
-        {
-            _initialFeasibility = true;
-            double savedsoi2 = _soi2;
-            _soi2 = 0;
-
-            DebugPrint("initial constraint violation:");
-            GetCost(x0);
-
             alglib.minnlccreate(x0, out alglib.minnlcstate state);
             alglib.minnlcsetbc(state, bndl, bndu);
             alglib.minnlcsetalgosqp(state);
@@ -415,15 +375,14 @@ namespace MechJebLib.Maneuvers
                 alglib.minnlcoptguardgradient(state, 1e-8);
 #endif
             alglib.minnlcoptimize(state, NLPFunction, null, null);
-            alglib.minnlcresults(state, out double[] x1, out alglib.minnlcreport rep1);
+            alglib.minnlcresults(state, out double[] x, out alglib.minnlcreport rep);
 
 #if DEBUG
-            bool[] boxConstrained = new bool[NVARIABLES];
-
             if (optguard)
             {
-                alglib.minnlcoptguardresults(state, out alglib.optguardreport ogrep);
+                bool[] boxConstrained = new bool[NVARIABLES];
 
+                alglib.minnlcoptguardresults(state, out alglib.optguardreport ogrep);
 
                 if (ogrep.badgradsuspected)
                     if (!DoubleMatrixSparsityValidation(ogrep.badgraduser, ogrep.badgradnum, boxConstrained, 1e-2))
@@ -437,6 +396,20 @@ namespace MechJebLib.Maneuvers
                     throw new Exception("nonc1suspected");
             }
 #endif
+
+            return (x, rep);
+        }
+
+        private Solution RunOptimizer(double[] x0, double[] bndl, double[] bndu, bool optguard)
+        {
+            _initialFeasibility = true;
+            double savedsoi2 = _soi2;
+            _soi2 = 0;
+
+            DebugPrint("initial constraint violation:");
+            GetCost(x0);
+
+            (double[] x1, alglib.minnlcreport rep1) = RunPass(x0, bndl, bndu, optguard);
 
             (double cost, double err) = AnalyzeSolution(x1, rep1);
 
@@ -455,7 +428,7 @@ namespace MechJebLib.Maneuvers
 
             // we should start with a near zero periapsis infalling vsoi2
             // nudge the solution in the b-plane to closer to the _peR that we want to target
-            var vsoiSph2 = new V3(x1[10], x1[11], x1[12]);
+            var vsoiSph2 = new V3(x1[13], x1[14], x1[15]);
             V3 vsoi2 = vsoiSph2.sph2cart;
 
             double vinf = vsoi2.magnitude;
@@ -467,56 +440,70 @@ namespace MechJebLib.Maneuvers
 
             V3 rsoiSph2 = rsoi2.cart2sph;
 
-            x1[8] = rsoiSph2.y;
-            x1[9] = rsoiSph2.z;
-            x1[10] = vsoiSph2.x;
-            x1[11] = vsoiSph2.y;
-            x1[12] = vsoiSph2.z;
+            x1[11] = rsoiSph2.y;
+            x1[12] = rsoiSph2.z;
+            x1[13] = vsoiSph2.x;
+            x1[14] = vsoiSph2.y;
+            x1[15] = vsoiSph2.z;
 
             for (int i = 0; i < x1.Length; i++)
                 DebugPrint($"x1[{i}] = {x1[i]}");
 
+            // the plane of the arrival hyperbola contains v-infinity, so its inclination is no less than the declination of
+            // v-infinity (and no more than 180 degrees minus it).  getting any closer to equatorial means bending the
+            // heliocentric trajectory to rotate v-infinity, which is expensive and stalls the optimizer.  so solve with the
+            // inclination free first, then clamp the inclination to what that v-infinity can reach and solve again.  the
+            // ZSOI v-infinity is not good enough for this, at Jupiter its declination is off by up to ~5 degrees.
+            double cosInc = _cosInc;
+            _cosInc = double.NaN;
+
             DebugPrint("second-pass initial constraint violation:");
             GetCost(x1);
 
-            alglib.minnlccreate(x1, out alglib.minnlcstate state2);
-            alglib.minnlcsetbc(state2, bndl, bndu);
-            alglib.minnlcsetalgosqp(state2);
-            alglib.minnlcsetcond(state2, 0, MAXITS);
-            alglib.minnlcsetnlc(state2, NUM_EQUALITY_CONSTRAINTS, NUM_INEQUALITY_CONSTRAINTS);
-#if DEBUG
-            if (optguard)
-                alglib.minnlcoptguardgradient(state2, 1e-8);
-#endif
-            alglib.minnlcoptimize(state2, NLPFunction, null, null);
-            alglib.minnlcresults(state2, out double[] x2, out alglib.minnlcreport rep2);
+            (double[] x2, alglib.minnlcreport rep2) = RunPass(x1, bndl, bndu, optguard);
 
-#if DEBUG
-            if (optguard)
+            (double cost2, double err2) = AnalyzeSolution(x2, rep2);
+
+            _cosInc = cosInc;
+
+            if (IsFinite(_cosInc) && IsFinite(_peR) && _peR > 0 && err2 <= 1e-4)
             {
-                alglib.minnlcoptguardresults(state, out alglib.optguardreport ogrep2);
+                // the margin is because the inclination at the limit is degenerate (the two b-plane solutions merge), and
+                // because rotating the plane moves the soi entry point which moves v-infinity a bit.
+                (_, _, rsoi2, vsoi2, _, _, _, _, _) = EvaluateTrajectory(x2);
+                double decl = Asin(Abs(IncomingAsymptote(1.0, rsoi2, vsoi2).z));
+                double cosIncMax = Cos(Min(decl + INC_CLAMP_MARGIN, PI / 2));
+                if (Abs(_cosInc) > cosIncMax)
+                {
+                    _cosInc = Sign(_cosInc) * cosIncMax;
+                    TargetInc = Acos(_cosInc);
+                    Print($"clamping inc to {Rad2Deg(TargetInc):G17} degrees, the arrival v-infinity has a declination of {Rad2Deg(decl):G17} degrees");
+                }
 
-                if (ogrep2.badgradsuspected)
-                    if (!DoubleMatrixSparsityValidation(ogrep2.badgraduser, ogrep2.badgradnum, boxConstrained, 1e-2))
-                        throw new Exception(
-                            $"badgradsuspected:\nuser:\n{DoubleMatrixString(ogrep2.badgraduser)}\nnumerical:\n{DoubleMatrixString(ogrep2.badgradnum)}\nsparsity check:\n{DoubleMatrixSparsityCheck(ogrep2.badgraduser, ogrep2.badgradnum, null, boxConstrained, 1e-2)}");
+                DebugPrint("third-pass initial constraint violation:");
+                GetCost(x2);
 
-                if (ogrep2.nonc0suspected)
-                    throw new Exception("nonc0suspected");
+                (x2, rep2) = RunPass(x2, bndl, bndu, optguard);
 
-                if (ogrep2.nonc1suspected)
-                    throw new Exception("nonc1suspected");
+                (cost2, err2) = AnalyzeSolution(x2, rep2);
             }
-#endif
 
             for (int i = 0; i < x2.Length; i++)
                 DebugPrint($"x2[{i}] = {x2[i]}");
 
-            (double cost2, double err2) = AnalyzeSolution(x2, rep2);
-
             V3 dv2 = GetManeuverDeltaV(x2, ref cost2, ref err2);
 
             return new Solution(dv2, x2[0], x2[1], x2[2], cost2, err2);
+        }
+
+        // direction of the incoming asymptote of a hyperbolic orbit
+        private static V3 IncomingAsymptote(double mu, V3 r, V3 v)
+        {
+            V3 ecc = Astro.EccVecFromStateVectors(mu, r, v);
+            double e = ecc.magnitude;
+            V3 p = ecc / e;
+            var q = V3.Cross(V3.Cross(r, v).normalized, p);
+            return (p + Sqrt(e * e - 1) * q) / e;
         }
 
         private (double cost, double err) AnalyzeSolution(double[] x, alglib.minnlcreport rep)
@@ -551,7 +538,7 @@ namespace MechJebLib.Maneuvers
             double[] fi0 = new double[m];
             NLPFunction(x, fi0, _jac);
 
-            foreach (int i in new[]{8, 9, 10, 11, 12})
+            foreach (int i in new[]{11, 12, 13, 14, 15})
             {
                 DebugPrint($"--- var {i} = {x[i]} ---");
                 foreach (double h in new[]{1e-1, 1e-2, 1e-3,1e-4,1e-5,1e-6,1e-7,1e-8,1e-9,1e-10})
@@ -571,7 +558,7 @@ namespace MechJebLib.Maneuvers
             V3 dv;
             try
             {
-                (_, _, _, _, dv, _, _, _) = EvaluateTrajectory(x);
+                (_, _, _, _, dv, _, _, _, _) = EvaluateTrajectory(x);
             }
             catch (Exception)
             {

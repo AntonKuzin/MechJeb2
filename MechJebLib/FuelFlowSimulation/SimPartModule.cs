@@ -12,11 +12,24 @@ namespace MechJebLib.FuelFlowSimulation
     public abstract class SimPartModule : IDisposable
     {
         public bool IsEnabled = false;
+
+        // ReSharper disable once NullableWarningSuppressionIsUsed
         public SimPart Part = null!;
         public bool ModuleIsEnabled = true;
         public bool StagingEnabled = true;
+        public int Index = -1;
 
         public abstract void Dispose();
+
+        protected virtual void Clear()
+        {
+            IsEnabled = false;
+            // ReSharper disable once NullableWarningSuppressionIsUsed
+            Part = null!;
+            ModuleIsEnabled = true;
+            StagingEnabled = true;
+            Index = -1;
+        }
 
         // Adds "name=value" to the token list only when the value differs from its declared default, so the concrete
         // ToString() debug dumps stay focused on what a fixture actually needs to set.
@@ -28,6 +41,11 @@ namespace MechJebLib.FuelFlowSimulation
         protected static void AddField(List<string> fields, string name, double val, double def)
         {
             // ReSharper disable once CompareOfFloatsByEqualityOperator
+            if (val != def) fields.Add(Invariant($"{name}={val:G17}"));
+        }
+
+        protected static void AddField(List<string> fields, string name, int val, int def)
+        {
             if (val != def) fields.Add(Invariant($"{name}={val}"));
         }
 
@@ -38,6 +56,7 @@ namespace MechJebLib.FuelFlowSimulation
             AddField(fields, "IsEnabled", IsEnabled, false);
             AddField(fields, "ModuleIsEnabled", ModuleIsEnabled, true);
             AddField(fields, "StagingEnabled", StagingEnabled, true);
+            AddField(fields, "Index", Index, -1);
             return fields;
         }
 

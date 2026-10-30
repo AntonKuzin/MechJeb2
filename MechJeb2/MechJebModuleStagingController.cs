@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System.Collections.Generic;
 using System.Linq;
 using KSP.UI.Screens;
@@ -33,8 +33,10 @@ namespace MuMech
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult FairingMinAltitude = new EditableDoubleMult(50000, 1000);
 
+        // fraction of available thrust required before launch clamps are released.  Stored as a fraction (0.99 == 99%);
+        // the UI text box edits it as a percentage.
         [Persistent(pass = (int)Pass.TYPE)]
-        public readonly EditableDouble ClampAutoStageThrustPct = 0.99;
+        public readonly EditableDoubleMult ClampAutoStageThrustPct = new EditableDoubleMult(0.99, 0.01);
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult FairingMaxAerothermalFlux = new EditableDoubleMult(1135);
@@ -84,6 +86,8 @@ namespace MuMech
         private readonly List<ModuleEngines> _allModuleEngines = new List<ModuleEngines>(16);
         private readonly List<PartModule> _allDecouplers = new List<PartModule>(16);
         private readonly List<int> _burnedResources = new List<int>(16);
+        private readonly List<Part> _partsDroppedInNextStage = new List<Part>(64);
+        private bool _partsDroppedInNextStageStale = true;
         private readonly Dictionary<int, bool> _inverseStageHasEngines = new Dictionary<int, bool>(16);
         private readonly Dictionary<int, bool> _inverseStageFiresDecouplerCache = new Dictionary<int, bool>(16);
         private readonly Dictionary<int, bool> _inverseStageReleasesClampsCache = new Dictionary<int, bool>(16);
@@ -179,9 +183,9 @@ namespace MuMech
 
         protected override void OnModuleDisabled() => AutostagingOnce = false;
 
-        private readonly string _sFairingMinDynamicPressure = $"  {CachedLocalizer.Instance.MechJebAscentLabel39} <";
-        private readonly string _sFairingMinAltitude = $"  {CachedLocalizer.Instance.MechJebAscentLabel40} >";
-        private readonly string _sFairingMaxAerothermalFlux = $"  {CachedLocalizer.Instance.MechJebAscentLabel41} <";
+        internal readonly string _sFairingMinDynamicPressure = $"  {CachedLocalizer.Instance.MechJebAscentLabel39} <";
+        internal readonly string _sFairingMinAltitude = $"  {CachedLocalizer.Instance.MechJebAscentLabel40} >";
+        internal readonly string _sFairingMaxAerothermalFlux = $"  {CachedLocalizer.Instance.MechJebAscentLabel41} <";
 
         private readonly string _sHotstaging =
             $"{CachedLocalizer.Instance.MechJebAscentHotStaging} {CachedLocalizer.Instance.MechJebAscentLeadTime}";
@@ -189,7 +193,7 @@ namespace MuMech
         private readonly string _sDropSolids =
             $"{CachedLocalizer.Instance.MechJebAscentDropSolids} {CachedLocalizer.Instance.MechJebAscentLeadTime}";
 
-        private readonly string _sLeadTime = $"{CachedLocalizer.Instance.MechJebAscentLeadTime}: ";
+        internal readonly string _sLeadTime = $"{CachedLocalizer.Instance.MechJebAscentLeadTime}: ";
 
         [GeneralInfoItem("#MechJeb_AutostagingSettings", InfoItem.Category.Misc)] //Autostaging settings
         public void AutostageSettingsInfoItem()
@@ -239,12 +243,17 @@ namespace MuMech
         [GeneralInfoItem("#MechJeb_ClampAutostageThrust", InfoItem.Category.Misc)] //Clamp Autostage Thrust
         private void ClampAutostageThrust()
         {
-            double prev = Core.Staging.ClampAutoStageThrustPct;
-            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel44, Core.Staging.ClampAutoStageThrustPct, "%",
-                50); //"Clamp AutoStage Thrust "
+            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel44, ClampAutoStageThrustPct, "%", 50); //"Clamp AutoStage Thrust "
+            ClampAutostageThrustValue();
+        }
+
+        /// <summary>Keep ClampAutoStageThrustPct in [0, 1] (done after each edit, by both UIs).</summary>
+        internal void ClampAutostageThrustValue()
+        {
+            double clamped = UtilMath.Clamp(ClampAutoStageThrustPct, 0, 1);
             // ReSharper disable once CompareOfFloatsByEqualityOperator
-            if (prev != Core.Staging.ClampAutoStageThrustPct)
-                Core.Staging.ClampAutoStageThrustPct.Val = UtilMath.Clamp(Core.Staging.ClampAutoStageThrustPct, 0, 100);
+            if (clamped != ClampAutoStageThrustPct)
+                ClampAutoStageThrustPct.Val = clamped;
         }
 
         //internal state:
@@ -272,13 +281,9 @@ namespace MuMech
                 RegenerateCaches();
             }
 
-            // if autostage enabled, and if we've already staged at least once, and if there are stages left,
-            // and if we are allowed to continue staging, and if we didn't just fire the previous stage
-            if (_waitingForFirstStaging || Vessel.currentStage <= 0 || Vessel.currentStage <= AutostageLimit ||
-                VesselState.Time - _lastStageTime < AutostagePostDelay)
-            {
+            // enforce hard limits on staging.
+            if (_waitingForFirstStaging || Vessel.currentStage <= 0 || Vessel.currentStage <= AutostageLimit)
                 return;
-            }
 
             // this is for PSG preventing staging doing coasts, possibly it should be more specific of an API
             // (e.g. bool PSGIsCoasting) since it is getting tightly coupled.
@@ -288,17 +293,15 @@ namespace MuMech
                 if (HasFairing(Vessel.currentStage - 1) && !WaitingForFairing())
                 {
                     Stage();
-                    return;
                 }
-                else
-                {
-                    return;
-                }
+
+                return;
             }
 
             UpdateActiveModuleEngines(_allModuleEngines);
             UpdateBurnedResources();
             _shouldDropSolids = null; // invalidate the cache; _droppingSolids recomputes lazily if needed this update
+            _partsDroppedInNextStageStale = true;
 
             if (Vessel.currentStage == _stats.HalfStageIndex && Vessel.totalMass <= _stats.HalfStageEndMass)
             {
@@ -393,12 +396,12 @@ namespace MuMech
             return false;
         }
 
-        // bypasses staging delays and immediately stages bypassing autostagePreDelay
+        // bypasses staging delays and other checks and immediately stages
         public void ImmediateStage()
         {
             if (InverseStageFiresDecoupler(Vessel.currentStage - 1))
             {
-                //if we decouple things, delay the next stage a bit to avoid exploding the debris
+                // track the last stage time for the post delay
                 _lastStageTime = VesselState.Time;
             }
 
@@ -436,8 +439,12 @@ namespace MuMech
 
         public void Stage()
         {
-            //When we find that we're allowed to stage, start a countdown (with a
-            //length given by autostagePreDelay) and only stage once that countdown finishes,
+            // do not stage if:  1. we have no more stages or 2. we've hit the user configured limit or 3. we're still in the post delay
+            // (this deliberately duplicates checks from OnFixedUpdate() for other callers)
+            if (Vessel.currentStage <= 0 || Vessel.currentStage <= AutostageLimit || VesselState.Time - _lastStageTime < AutostagePostDelay)
+                return;
+
+            // enforce the predelay
             if (!_countingDown)
             {
                 _countingDown = true;
@@ -445,9 +452,7 @@ namespace MuMech
             }
 
             if (VesselState.Time - _stageCountdownStart >= AutostagePreDelay)
-            {
                 ImmediateStage();
-            }
         }
 
         //determine whether it's safe to activate inverseStage
@@ -532,13 +537,96 @@ namespace MuMech
                 Part p = engine.part;
                 // a flamed out engine cannot burn anything, so it must not keep tanks alive: an LFO booster that has run its
                 // oxidizer dry still has leftover LF, and a burned out SRB is still isEnabled
-                if (p.inverseStage >= Vessel.currentStage && !p.IsDecoupledInStage(Vessel.currentStage - 1) && engine.isEnabled &&
-                    !engine.getFlameoutState)
-                    _activeModuleEngines.Add(engine);
+                if (p.inverseStage < Vessel.currentStage || !engine.isEnabled || engine.getFlameoutState)
+                    continue;
+
+                // an engine which is being dropped only keeps tanks alive while it is running, since a running engine with
+                // drop tanks is held by those tanks rather than by itself (see EnginesHaveDropTanks)
+                if (p.IsDecoupledInStage(Vessel.currentStage - 1) && (!engine.EngineHasFuel() || engine.IsUnrestartableDeadEngine()))
+                    continue;
+
+                _activeModuleEngines.Add(engine);
             }
         }
 
-        // Find resources burned by engines that will remain after staging (so we wait until tanks are empty before releasing drop tanks)
+        // the parts the decouplers of the next stage drop, lazily collected once per fixed update
+        private List<Part> PartsDroppedInNextStage()
+        {
+            if (!_partsDroppedInNextStageStale)
+                return _partsDroppedInNextStage;
+
+            _partsDroppedInNextStage.Clear();
+            foreach (PartModule pm in _allDecouplers)
+                if (pm.part.inverseStage == Vessel.currentStage - 1 && pm.IsUnfiredDecoupler(out Part decoupledPart))
+                    AddPartAndDescendants(decoupledPart, _partsDroppedInNextStage);
+
+            _partsDroppedInNextStageStale = false;
+            return _partsDroppedInNextStage;
+        }
+
+        private static void AddPartAndDescendants(Part p, List<Part> parts)
+        {
+            if (p is null)
+                return;
+
+            parts.Add(p);
+
+            for (int i = 0; i < p.children.Count; i++)
+                AddPartAndDescendants(p.children[i], parts);
+        }
+
+        // a running engine with drop tanks does not hold the stage itself, its drop tanks do (it keeps them alive in
+        // _activeModuleEngines) until they are empty.  so a booster which crossfeeds from the core after its own tanks run dry
+        // is still dropped, while engines with no tanks of their own (like the Atlas booster engines) are held until they
+        // burn out.
+        private bool EnginesHaveDropTanks(Part p)
+        {
+            bool found = false;
+
+            foreach (ModuleEngines engine in _activeModuleEngines)
+            {
+                if (engine.part != p)
+                    continue;
+                if (!EngineHasDropTanks(engine))
+                    return false;
+                found = true;
+            }
+
+            return found;
+        }
+
+        // true if the engine can draw on a tank which is dropped along with it in the next stage, whether or not that tank is
+        // empty yet.  this uses the capacity, so that the engine still has its drop tanks after it has drained them.
+        private bool EngineHasDropTanks(ModuleEngines engine)
+        {
+            List<Part> dropped = PartsDroppedInNextStage();
+
+            foreach (Propellant propellant in engine.propellants)
+            {
+                if (propellant.id == PartResourceLibrary.ElectricityHashcode)
+                    continue;
+
+                bool noFlow = propellant.GetFlowMode() == ResourceFlowMode.NO_FLOW;
+
+                for (int i = 0; i < dropped.Count; i++)
+                {
+                    Part t = dropped[i];
+
+                    if (!t.Resources.Contains(propellant.id))
+                        continue;
+                    if (t.Resources.Get(propellant.id).maxAmount <= t.resourceRequestRemainingThreshold)
+                        continue;
+
+                    if (noFlow ? engine.part == t : engine.part.crossfeedPartSet.ContainsPart(t))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Find resources burned by the active engines, which includes running engines with drop tanks that are being dropped
+        // themselves (so we wait until tanks are empty before releasing drop tanks)
         private void UpdateBurnedResources()
         {
             _burnedResources.Clear();
@@ -608,7 +696,8 @@ namespace MuMech
 
             if (!p.IsSepratron() && !IsBurnedOutSrbDecoupledInNextStage(p))
             {
-                if ((p.State == PartStates.ACTIVE || p.State == PartStates.IDLE) && p.EngineHasFuel() && !p.IsUnrestartableDeadEngine())
+                if ((p.State == PartStates.ACTIVE || p.State == PartStates.IDLE) && p.EngineHasFuel() && !p.IsUnrestartableDeadEngine() &&
+                    !EnginesHaveDropTanks(p))
                 {
                     return true; // TODO: properly check if ModuleEngines is active
                 }

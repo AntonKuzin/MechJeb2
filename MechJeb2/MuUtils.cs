@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -10,6 +10,12 @@ namespace MuMech
         private static readonly string _cfgPath = Path.Combine(KSPUtil.ApplicationRootPath, "GameData/MechJeb2/Plugins/PluginData/MechJeb2");
 
         public static string GetCfgPath(string file) => Path.Combine(_cfgPath, file);
+
+        // Same sanitizer KSP uses for .craft filenames.  Unlike Path.GetInvalidFileNameChars() it doesn't vary by platform, so names
+        // saved on Linux/macOS can't produce files that break Windows/Proton.
+        public static string SanitizeFileName(string name) => KSPUtil.SanitizeString(name, '_', true);
+
+        public static string GetTypeCfgPath(string vesselName) => GetCfgPath("mechjeb_settings_type_" + SanitizeFileName(vesselName) + ".cfg");
 
         // Duplicates the KSP.IO.File.Exist style API where it creates the directory if it doesn't exist
         public static bool FileExistsCreateDirectory(string path)
@@ -43,22 +49,6 @@ namespace MuMech
         public static string PrettyPrint(Quaternion quaternion, string format = "F3") =>
             "[" + PadPositive(quaternion.x, format) + ", " + PadPositive(quaternion.y, format) + ", " + PadPositive(quaternion.z, format) +
             ", " + PadPositive(quaternion.w, format) + "]";
-
-        //keeps angles in the range 0 to 360
-        public static double ClampDegrees360(double angle)
-        {
-            angle = angle % 360.0;
-            if (angle < 0) return angle + 360.0;
-            return angle;
-        }
-
-        //keeps angles in the range -180 to 180
-        public static double ClampDegrees180(double angle)
-        {
-            angle = ClampDegrees360(angle);
-            if (angle > 180) angle -= 360;
-            return angle;
-        }
 
         public static Orbit OrbitFromStateVectors(Vector3d pos, Vector3d vel, CelestialBody body, double ut)
         {
@@ -214,35 +204,5 @@ namespace MuMech
         public override string ToString() => Value.ToString();
 
         public string ToString(string format) => MuUtils.PrettyPrint(Value, format);
-    }
-
-    //Represents a 2x2 matrix
-    public class Matrix2X2
-    {
-        private readonly double _a, _b, _c, _d;
-
-        //  [a    b]
-        //  [      ]
-        //  [c    d]
-
-        public Matrix2X2(double a, double b, double c, double d)
-        {
-            _a = a;
-            _b = b;
-            _c = c;
-            _d = d;
-        }
-
-        public Matrix2X2 Inverse()
-        {
-            //           1  [d   -c]
-            //inverse = --- [      ]
-            //          det [-b   a]
-
-            double det = _a * _d - _b * _c;
-            return new Matrix2X2(_d / det, -_b / det, -_c / det, _a / det);
-        }
-
-        public static Vector2d operator *(Matrix2X2 m, Vector2d vec) => new Vector2d(m._a * vec.x + m._b * vec.y, m._c * vec.x + m._d * vec.y);
     }
 }

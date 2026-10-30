@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,8 +11,6 @@ namespace MuMech
 {
     public class MechJebModuleThrustController : ComputerModule
     {
-        private static bool _isLoadedRealFuels => ReflectionUtils.IsAssemblyLoaded("RealFuels");
-
         public enum DifferentialThrottleStatus
         {
             SUCCESS,
@@ -54,12 +52,6 @@ namespace MuMech
             LimitToPreventOverheats =
                 GUILayout.Toggle(LimitToPreventOverheats, CachedLocalizer.Instance.MechJebAscentCheckbox12, s); //"Prevent engine overheats"
         }
-
-        [ToggleInfoItem("#MechJeb_SmoothThrottle", InfoItem.Category.Thrust), Persistent(pass = (int)Pass.GLOBAL)] //Smooth throttle
-        public bool SmoothThrottle;
-
-        [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
-        public double ThrottleSmoothingTime = 1.0;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public bool LimitToPreventFlameout;
@@ -129,17 +121,22 @@ namespace MuMech
         }
 
         [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
-        public bool LimiterMinThrottle = true;
+        public bool LimiterMinThrottle;
 
         [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult MinThrottle = new EditableDoubleMult(0.05, 0.01);
 
+        private static GUIContent _limiterMinThrottleContent;
+
         [GeneralInfoItem("#MechJeb_LowerThrottleLimit", InfoItem.Category.Thrust)] //Lower throttle limit
         public void LimiterMinThrottleInfoItem()
         {
-            GUIStyle s = Limiter == LimitMode.MIN_THROTTLE ? GuiUtils.GreenToggle : null;
-            GuiUtils.ToggledTextBox(ref LimiterMinThrottle, CachedLocalizer.Instance.MechJebAscentCheckbox18, MinThrottle, "%", s,
-                30); //"Keep limited throttle over"
+            // RF users should almost always have this set, "stock" users should almost always never have this set
+            bool warn = ReflectionUtils.IsLoadedRealFuels ? !LimiterMinThrottle || MinThrottle <= 0d : LimiterMinThrottle && MinThrottle > 0d;
+            GUIStyle s = Limiter == LimitMode.MIN_THROTTLE ? GuiUtils.GreenToggle : warn ? GuiUtils.YellowToggle : null;
+            _limiterMinThrottleContent ??= new GUIContent(CachedLocalizer.Instance.MechJebAscentCheckbox18,
+                Localizer.Format("#MechJeb_Ascent_checkbox18_tooltip"));
+            GuiUtils.ToggledTextBox(ref LimiterMinThrottle, _limiterMinThrottleContent, MinThrottle, "%", s, 30); //"Keep limited throttle over"
         }
 
         [UsedImplicitly, Persistent(pass = (int)Pass.TYPE)]
@@ -185,7 +182,7 @@ namespace MuMech
             GUIStyle s = GuiUtils.Skin.label;
             if (Limiter == LimitMode.ELECTRIC)
             {
-                s = VesselState.ThrottleLimit < 0.001 ? GuiUtils.RedLabel : GuiUtils.YellowLabel;
+                s = ThrottleLimit < 0.001 ? GuiUtils.RedLabel : GuiUtils.YellowLabel;
             }
             else if (ElectricEngineRunning()) s = GuiUtils.GreenLabel;
 
@@ -253,7 +250,8 @@ namespace MuMech
             // Permanent self-pin: keep this module always Enabled so its throttle limiters and
             // auto-RCS-ullaging run every tick as an always-on safety service, even when no autopilot
             // is driving the throttle (e.g. the player is flying manually). Active throttle control is
-            // gated separately on there being a *second* user (see Users.Count > 1 in Drive()).
+            // gated separately on there being a *second* user (see Users.Count > 1 in Drive()). If the
+            // R&D tech is missing (unlockTechs in the part cfgs) the module is TechLocked and stays disabled.
             Users.Add(this);
 
             base.OnStart(state);
@@ -264,6 +262,7 @@ namespace MuMech
             if (Vessel == null || Vessel.ctrlState == null)
                 return;
 
+            LastThrottle = 0;
             TargetThrottle = 0;
             Vessel.ctrlState.mainThrottle = 0;
             Tmode = TMode.OFF;
@@ -303,11 +302,11 @@ namespace MuMech
 
         /* the current throttle limit, this may include transient condition such as limiting to zero due to unstable propellants in RF */
         [UsedImplicitly]
-        public float ThrottleLimit { get; set; }
+        public float ThrottleLimit { get; set; } = 1;
 
         /* the fixed throttle limit (i.e. user limited in the GUI), does not include transient conditions as limiting to zero due to unstable propellants in RF */
         [UsedImplicitly]
-        public float ThrottleFixedLimit { get; set; }
+        public float ThrottleFixedLimit { get; set; } = 1;
 
         /* This is an API for limits which are "temporary" or "conditional" (things like ullage status which will change very soon).
            This will often be temporarily zero, which means the computed accelleration of the ship will be zero, which would cause
@@ -352,9 +351,6 @@ namespace MuMech
                 _userCommandingRotationSmoothed--;
             }
 
-            // These are tech-gates (is the window in the drop down?), not normal UI visibility of the window
-            if (Core.GetComputerModule<MechJebModuleThrustWindow>().Hidden && Core.GetComputerModule<MechJebModuleAscentMenu>().Hidden) { return; }
-
             if (Tmode != TMode.OFF && VesselState.ThrustAvailable > 0)
             {
                 double spd = 0;
@@ -386,7 +382,7 @@ namespace MuMech
                                 rot = dir.normalized;
                             }
 
-                            Core.Attitude.attitudeTo(rot, AttitudeReference.INERTIAL, null);
+                            Core.Attitude.AttitudeTo(rot, AttitudeReference.INERTIAL, null);
                         }
 
                         break;
@@ -404,8 +400,8 @@ namespace MuMech
 
                 if (Tmode != TMode.KEEP_VERTICAL
                     || !TransKillH
-                    || Core.Attitude.attitudeError < 2
-                    || (Math.Min(VesselState.AltitudeASL, VesselState.AltitudeTrue) < 1000 && Core.Attitude.attitudeError < 90))
+                    || Core.Attitude.AttitudeError < 2
+                    || (Math.Min(VesselState.AltitudeASL, VesselState.AltitudeTrue) < 1000 && Core.Attitude.AttitudeError < 90))
                 {
                     if (Tmode == TMode.DIRECT)
                     {
@@ -424,7 +420,7 @@ namespace MuMech
                     bool useDiffThrottle = VesselState.TorqueDifferentialThrottle.x > VesselState.TorqueAvailable.x * 10 ||
                         VesselState.TorqueDifferentialThrottle.z > VesselState.TorqueAvailable.z * 10;
 
-                    if (Core.Attitude.attitudeError >= 2 && (useGimbal || (useDiffThrottle && Core.Thrust.DifferentialThrottle)))
+                    if (Core.Attitude.AttitudeError >= 2 && (useGimbal || (useDiffThrottle && Core.Thrust.DifferentialThrottle)))
                     {
                         _transPrevThrust = TargetThrottle = 0.1F;
                         Print(" targetThrottle = 0.1F");
@@ -545,17 +541,9 @@ namespace MuMech
             if (double.IsNaN(ThrottleFixedLimit)) ThrottleFixedLimit = 1.0F;
             ThrottleFixedLimit = Mathf.Clamp01(ThrottleFixedLimit);
 
-            VesselState.ThrottleLimit = ThrottleLimit;
-            VesselState.ThrottleFixedLimit = ThrottleFixedLimit;
-
             if (s.mainThrottle < ThrottleLimit) Limiter = LimitMode.NONE;
 
             s.mainThrottle = Mathf.Min(s.mainThrottle, ThrottleLimit);
-
-            if (SmoothThrottle)
-            {
-                s.mainThrottle = ApplySmoothThrottle(s.mainThrottle);
-            }
 
             if (double.IsNaN(s.mainThrottle)) s.mainThrottle = 0;
 
@@ -590,6 +578,9 @@ namespace MuMech
         // limits before the next differential-throttle solve sees the new topology.
         public override void OnVesselWasModified(Vessel v) => DisableDifferentialThrottle();
 
+        // OnFixedUpdate stops running once we are disabled (e.g. tech-locked), so restore the limits now.
+        protected override void OnModuleDisabled() => DisableDifferentialThrottle();
+
         public override void OnDestroy()
         {
             DisableDifferentialThrottle();
@@ -620,11 +611,6 @@ namespace MuMech
             if (maxTempRatio < 1 - TEMP_SAFETY_MARGIN) return 1.0F;
             return (1 - maxTempRatio) / TEMP_SAFETY_MARGIN;
         }
-
-        private float ApplySmoothThrottle(float mainThrottle) =>
-            Mathf.Clamp(mainThrottle,
-                (float)(LastThrottle - VesselState.DeltaT / ThrottleSmoothingTime),
-                (float)(LastThrottle + VesselState.DeltaT / ThrottleSmoothingTime));
 
         private float FlameoutSafetyThrottle()
         {
@@ -773,12 +759,32 @@ namespace MuMech
             }
         }
 
-        private bool ElectricEngineRunning()
+        // also read every frame by the new UI (the "engine running" green of the electric limit), so no LINQ and no allocations
+        internal bool ElectricEngineRunning()
         {
-            IEnumerable<Part> activeEngines = Vessel.parts.Where(p => p.inverseStage >= Vessel.currentStage && p.IsEngine() && !p.IsSepratron());
-            IEnumerable<ModuleEngines> engineModules = activeEngines.Select(p => p.Modules.OfType<ModuleEngines>().First(e => e.isEnabled));
+            Vessel vessel = Vessel;
+            if (vessel == null) return false;
 
-            return engineModules.SelectMany(eng => eng.propellants).Any(p => p.id == PartResourceLibrary.ElectricityHashcode);
+            List<Part> parts = vessel.parts;
+            int electricity = PartResourceLibrary.ElectricityHashcode;
+            for (int i = 0; i < parts.Count; i++)
+            {
+                Part p = parts[i];
+                if (p.inverseStage < vessel.currentStage || !p.IsEngine() || p.IsSepratron()) continue;
+
+                PartModuleList modules = p.Modules;
+                for (int j = 0; j < modules.Count; j++)
+                {
+                    if (!(modules[j] is ModuleEngines eng) || !eng.isEnabled) continue;
+
+                    List<Propellant> propellants = eng.propellants;
+                    for (int k = 0; k < propellants.Count; k++)
+                        if (propellants[k].id == electricity)
+                            return true;
+                }
+            }
+
+            return false;
         }
 
         private float ElectricThrottleLimit()
@@ -807,16 +813,11 @@ namespace MuMech
 
         public override void OnUpdate()
         {
-            if (Core.GetComputerModule<MechJebModuleThrustWindow>().Hidden && Core.GetComputerModule<MechJebModuleAscentMenu>().Hidden)
-            {
-                return;
-            }
-
             if (_tmodeChanged)
             {
                 if (TransKillH && Tmode == TMode.OFF)
                 {
-                    Core.Attitude.attitudeDeactivate();
+                    Core.Attitude.AttitudeDeactivate();
                 }
 
                 _pid.Reset();
@@ -852,7 +853,7 @@ namespace MuMech
         {
             // because we don't always return when ullage is stable below, we have to
             // explicitly check for RF being loaded.
-            if (!_isLoadedRealFuels)
+            if (!ReflectionUtils.IsLoadedRealFuels)
                 return;
 
             if (!AutoRCSUllaging || s.mainThrottle <= 0F || ThrottleLimit <= 0F)
@@ -970,9 +971,9 @@ namespace MuMech
             return DifferentialThrottleStatus.SUCCESS;
         }
 
-        private void DisableDifferentialThrottle()
+        internal void DisableDifferentialThrottle() // internal: also called by the uGUI Utilities view (MechJeb2.UI)
         {
-            foreach (var entry in _thrustLimitsBeforeDifferentialThrottle)
+            foreach (KeyValuePair<ModuleEngines, float> entry in _thrustLimitsBeforeDifferentialThrottle)
             {
                 if (entry.Key != null)
                     entry.Key.thrustPercentage = entry.Value;

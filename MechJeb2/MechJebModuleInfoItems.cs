@@ -27,9 +27,9 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_NodeBurnTime", InfoItem.Category.Misc)] //Node burn time
         public string NextManeuverNodeBurnTime()
         {
-            if (!Vessel.patchedConicsUnlocked() || !Vessel.patchedConicSolver.maneuverNodes.Any()) return "N/A";
+            if (!Vessel.patchedConicsUnlocked() || Vessel.patchedConicSolver.maneuverNodes.Count == 0) return "N/A";
 
-            ManeuverNode node = Vessel.patchedConicSolver.maneuverNodes.First();
+            ManeuverNode node = Vessel.patchedConicSolver.maneuverNodes[0];
             double burnTime = node.GetBurnVector(node.patch).magnitude / VesselState.LimitedMaxThrustAcceleration;
             return GuiUtils.TimeToDHMS(burnTime);
         }
@@ -37,7 +37,7 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_TimeToNode", InfoItem.Category.Misc)] //Time to node
         public string TimeToManeuverNode()
         {
-            if (!Vessel.patchedConicsUnlocked() || !Vessel.patchedConicSolver.maneuverNodes.Any()) return "N/A";
+            if (!Vessel.patchedConicsUnlocked() || Vessel.patchedConicSolver.maneuverNodes.Count == 0) return "N/A";
 
             return GuiUtils.TimeToDHMS(Vessel.patchedConicSolver.maneuverNodes[0].UT - VesselState.Time);
         }
@@ -45,7 +45,7 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_NodedV", InfoItem.Category.Misc)] //Node dV
         public string NextManeuverNodeDeltaV()
         {
-            if (!Vessel.patchedConicsUnlocked() || !Vessel.patchedConicSolver.maneuverNodes.Any()) return "N/A";
+            if (!Vessel.patchedConicsUnlocked() || Vessel.patchedConicSolver.maneuverNodes.Count == 0) return "N/A";
 
             return Vessel.patchedConicSolver.maneuverNodes[0].GetBurnVector(Orbit).magnitude.ToSI() + "m/s";
         }
@@ -128,8 +128,9 @@ namespace MuMech
             for (int i = 0; i < Vessel.parts.Count; i++)
             {
                 Part p = Vessel.parts[i];
-                foreach (ModuleRCS pm in p.Modules.OfType<ModuleRCS>())
+                for (int m = 0; m < p.Modules.Count; m++)
                 {
+                    if (!(p.Modules[m] is ModuleRCS pm)) continue;
                     if (p.Rigidbody == null || !pm.isEnabled || pm.isJustForShow)
                     {
                         continue;
@@ -166,8 +167,9 @@ namespace MuMech
 
             foreach (Part p in Vessel.parts)
             {
-                foreach (ModuleRCS pm in p.Modules.OfType<ModuleRCS>())
+                for (int m = 0; m < p.Modules.Count; m++)
                 {
+                    if (!(p.Modules[m] is ModuleRCS pm)) continue;
                     if (p.Rigidbody == null || !pm.isEnabled || pm.isJustForShow)
                     {
                         continue;
@@ -253,8 +255,10 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_VesselMass", InfoItem.Category.Vessel, format = "F3", units = "t", showInEditor = true)] //Vessel mass
         public double VesselMass()
         {
-            if (HighLogic.LoadedSceneIsEditor) return EditorLogic.fetch.ship.parts.Sum(p => p.mass + p.GetResourceMass());
-            return VesselState.Mass;
+            if (!HighLogic.LoadedSceneIsEditor) return VesselState.Mass;
+            double mass = 0;
+            foreach (Part p in EditorLogic.fetch.ship.parts) mass += p.mass + p.GetResourceMass();
+            return mass;
         }
 
         [ValueInfoItem("#MechJeb_MaxVesselMass", InfoItem.Category.Vessel, showInEditor = true, showInFlight = false)] //Max vessel mass
@@ -270,7 +274,14 @@ namespace MuMech
         }
 
         [ValueInfoItem("#MechJeb_DryMass", InfoItem.Category.Vessel, showInEditor = true, format = "F3", units = "t")] //Dry mass
-        public double DryMass() => parts.Where(p => p.IsPhysicallySignificant()).Sum(p => p.mass + p.GetPhysicslessChildMass());
+        public double DryMass()
+        {
+            double mass = 0;
+            foreach (Part p in parts)
+                if (p.IsPhysicallySignificant())
+                    mass += p.mass + p.GetPhysicslessChildMass();
+            return mass;
+        }
 
         [ValueInfoItem("#MechJeb_LiquidFuelandOxidizerMass", InfoItem.Category.Vessel, showInEditor = true, format = "F2",
             units = "t")] //Liquid fuel & oxidizer mass
@@ -287,14 +298,7 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_MaxThrust", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "N", showInEditor = true)] //Max thrust
         public double MaxThrust()
         {
-            if (HighLogic.LoadedSceneIsEditor)
-            {
-                IEnumerable<ModuleEngines> engines = from part in EditorLogic.fetch.ship.parts
-                                                     where part.inverseStage == StageManager.LastStage
-                                                     from engine in part.Modules.OfType<ModuleEngines>()
-                                                     select engine;
-                return 1000 * engines.Sum(e => e.minThrust + e.thrustPercentage / 100f * (e.maxThrust - e.minThrust));
-            }
+            if (HighLogic.LoadedSceneIsEditor) return 1000 * EditorLastStageThrust(false);
 
             return 1000 * VesselState.ThrustAvailable;
         }
@@ -302,17 +306,28 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_MinThrust", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "N", showInEditor = true)] //Min thrust
         public double MinThrust()
         {
-            if (HighLogic.LoadedSceneIsEditor)
-            {
-                IEnumerable<ModuleEngines> engines = from part in EditorLogic.fetch.ship.parts
-                                                     where part.inverseStage == StageManager.LastStage
-                                                     from engine in part.Modules.OfType<ModuleEngines>()
-                                                     select engine;
-                return 1000 * engines.Sum(e =>
-                    e.throttleLocked ? e.minThrust + e.thrustPercentage / 100f * (e.maxThrust - e.minThrust) : e.minThrust);
-            }
+            if (HighLogic.LoadedSceneIsEditor) return 1000 * EditorLastStageThrust(true);
 
             return VesselState.ThrustMinimum;
+        }
+
+        // Thrust of the engines in the editor's last stage, in kN: at full throttle, or at minimum (throttle-locked engines
+        // can't throttle down). A loop: these items are drawn every frame.
+        private static double EditorLastStageThrust(bool minimum)
+        {
+            double thrust = 0;
+            foreach (Part part in EditorLogic.fetch.ship.parts)
+            {
+                if (part.inverseStage != StageManager.LastStage) continue;
+                for (int i = 0; i < part.Modules.Count; i++)
+                {
+                    if (!(part.Modules[i] is ModuleEngines e)) continue;
+                    float full = e.minThrust + e.thrustPercentage / 100f * (e.maxThrust - e.minThrust);
+                    thrust += minimum && !e.throttleLocked ? e.minThrust : full;
+                }
+            }
+
+            return thrust;
         }
 
         [ValueInfoItem("#MechJeb_MaxAcceleration", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "m/s²",
@@ -343,19 +358,43 @@ namespace MuMech
         public string PartCountAndMaxPartCount() => $"{PartCount().ToString()} / {MaxPartCount()}";
 
         [ValueInfoItem("#MechJeb_StrutCount", InfoItem.Category.Vessel, showInEditor = true)] //Strut count
-        public int StrutCount() => parts.Count(p => p is CompoundPart && p.Modules.GetModule<CModuleStrut>());
+        public int StrutCount()
+        {
+            int n = 0;
+            foreach (Part p in parts)
+                if (p is CompoundPart && p.Modules.GetModule<CModuleStrut>())
+                    n++;
+            return n;
+        }
 
         [ValueInfoItem("#MechJeb_FuelLinesCount", InfoItem.Category.Vessel, showInEditor = true)] //Fuel Lines count
-        public int FuelLinesCount() => parts.Count(p => p is CompoundPart && p.Modules.GetModule<CModuleFuelLine>());
+        public int FuelLinesCount()
+        {
+            int n = 0;
+            foreach (Part p in parts)
+                if (p is CompoundPart && p.Modules.GetModule<CModuleFuelLine>())
+                    n++;
+            return n;
+        }
 
         [ValueInfoItem("#MechJeb_VesselCost", InfoItem.Category.Vessel, showInEditor = true, format = ValueInfoItem.SI, units = "$")] //Vessel cost
-        public double VesselCost() => parts.Sum(p => p.partInfo.cost) * 1000;
+        public double VesselCost()
+        {
+            double cost = 0;
+            foreach (Part p in parts) cost += p.partInfo.cost;
+            return cost * 1000;
+        }
 
         [ValueInfoItem("#MechJeb_CrewCount", InfoItem.Category.Vessel)] //Crew count
         public int CrewCount() => Vessel.GetCrewCount();
 
         [ValueInfoItem("#MechJeb_CrewCapacity", InfoItem.Category.Vessel, showInEditor = true)] //Crew capacity
-        public int CrewCapacity() => parts.Sum(p => p.CrewCapacity);
+        public int CrewCapacity()
+        {
+            int n = 0;
+            foreach (Part p in parts) n += p.CrewCapacity;
+            return n;
+        }
 
         [ValueInfoItem("#MechJeb_DistanceToTarget", InfoItem.Category.Target)] //Distance to target
         public string TargetDistance()
@@ -449,7 +488,7 @@ namespace MuMech
             if (!Core.Target.NormalTargetExists) return "N/A";
 
             Orbit o;
-            if (Vessel.patchedConicsUnlocked() && Vessel.patchedConicSolver.maneuverNodes.Any())
+            if (Vessel.patchedConicsUnlocked() && Vessel.patchedConicSolver.maneuverNodes.Count > 0)
             {
                 ManeuverNode node = Vessel.patchedConicSolver.maneuverNodes.Last();
                 o = node.nextPatch;
@@ -545,7 +584,7 @@ namespace MuMech
         public string TargetLDN()
         {
             if (!Core.Target.NormalTargetExists) return "N/A";
-            return MuUtils.ClampDegrees360(Core.Target.TargetOrbit.LAN + 180).ToString("F2") + "º";
+            return Clamp360(Core.Target.TargetOrbit.LAN + 180).ToString("F2") + "º";
         }
 
         [ValueInfoItem("#MechJeb_TargetTimeToAN", InfoItem.Category.Target)] //Target Time to AN
@@ -591,7 +630,7 @@ namespace MuMech
         public string TargetMeanAnomaly()
         {
             if (!Core.Target.NormalTargetExists) return "N/A";
-            return MuUtils.ClampDegrees360(Core.Target.TargetOrbit.meanAnomaly * UtilMath.Rad2Deg).ToString("F2") + "º";
+            return Clamp360(Core.Target.TargetOrbit.meanAnomaly * UtilMath.Rad2Deg).ToString("F2") + "º";
         }
 
         [ValueInfoItem("#MechJeb_TargetTrueLongitude", InfoItem.Category.Target)] //Target Mean Anomaly
@@ -599,7 +638,7 @@ namespace MuMech
         {
             if (!Core.Target.NormalTargetExists) return "N/A";
             double longitudeOfPeriapsis = Core.Target.TargetOrbit.LAN + Core.Target.TargetOrbit.argumentOfPeriapsis;
-            return MuUtils.ClampDegrees360(Core.Target.TargetOrbit.trueAnomaly * UtilMath.Rad2Deg + longitudeOfPeriapsis).ToString("F2") + "º";
+            return Clamp360(Core.Target.TargetOrbit.trueAnomaly * UtilMath.Rad2Deg + longitudeOfPeriapsis).ToString("F2") + "º";
         }
 
         [ValueInfoItem("#MechJeb_SynodicPeriod", InfoItem.Category.Target)] //Synodic period
@@ -757,12 +796,10 @@ namespace MuMech
 
         // Leave this stub here until I figure out how to properly target in the new class
         [GeneralInfoItem("#MechJeb_StageStatsAll", InfoItem.Category.Vessel, showInEditor = true)] //Stage stats (all)
-        public void AllStageStats()
-        {
-            if (stageStatsHelper == null)
-                stageStatsHelper = new MechJebStageStatsHelper(this);
-            stageStatsHelper.AllStageStats();
-        }
+        public void AllStageStats() => StageStatsHelper.AllStageStats();
+
+        /// <summary>The stage stats state shared by the IMGUI item and MechJeb2.UI's table.</summary>
+        internal MechJebStageStatsHelper StageStatsHelper => stageStatsHelper ??= new MechJebStageStatsHelper(this);
 
         public void UpdateItems() => stageStatsHelper?.UpdateStageStats();
 
@@ -791,13 +828,33 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_StageDV_atmo_vac", InfoItem.Category.Vessel, units = "m/s", showInEditor = true)] //Stage ΔV (atmo, vac)
         public string StageDeltaVAtmosphereAndVac()
         {
+            StageDeltaVPair(out double atmDv, out double vacDv);
+            return $"{atmDv:F0}, {vacDv:F0}";
+        }
+
+        /// <summary>The current stage's ΔV in atmosphere and vacuum: StageDeltaVAtmosphereAndVac without the string.</summary>
+        internal void StageDeltaVPair(out double atmDv, out double vacDv)
+        {
             MechJebModuleStageStats stats = Core.GetComputerModule<MechJebModuleStageStats>();
             stats.RequestUpdate();
+            atmDv = stats.AtmoStats.Count == 0 ? 0 : stats.AtmoStats[stats.AtmoStats.Count - 1].DeltaV;
+            vacDv = stats.VacStats.Count == 0 ? 0 : stats.VacStats[stats.VacStats.Count - 1].DeltaV;
+        }
 
-            double atmDv = stats.AtmoStats.Count == 0 ? 0 : stats.AtmoStats[stats.AtmoStats.Count - 1].DeltaV;
-            double vacDv = stats.VacStats.Count == 0 ? 0 : stats.VacStats[stats.VacStats.Count - 1].DeltaV;
+        /// <summary>The vessel's total ΔV in atmosphere and vacuum: TotalDeltaVAtmosphereAndVac without the string.</summary>
+        internal void TotalDeltaVPair(out double atmDv, out double vacDv)
+        {
+            MechJebModuleStageStats stats = Core.GetComputerModule<MechJebModuleStageStats>();
+            stats.RequestUpdate();
+            atmDv = SumDeltaV(stats.AtmoStats);
+            vacDv = SumDeltaV(stats.VacStats);
+        }
 
-            return $"{atmDv:F0}, {vacDv:F0}";
+        private static double SumDeltaV(List<MechJebLib.FuelFlowSimulation.FuelStats> stages)
+        {
+            double dv = 0;
+            for (int i = 0; i < stages.Count; i++) dv += stages[i].DeltaV;
+            return dv;
         }
 
         [ValueInfoItem("#MechJeb_StageTimeFullThrottle", InfoItem.Category.Vessel, format = ValueInfoItem.TIME,
@@ -840,7 +897,7 @@ namespace MuMech
         {
             MechJebModuleStageStats stats = Core.GetComputerModule<MechJebModuleStageStats>();
             stats.RequestUpdate();
-            return stats.VacStats.Sum(s => s.DeltaV);
+            return SumDeltaV(stats.VacStats);
         }
 
         [ValueInfoItem("#MechJeb_TotalDV_atmo", InfoItem.Category.Vessel, format = "F0", units = "m/s", showInEditor = true)] //Total ΔV (atmo)
@@ -848,18 +905,13 @@ namespace MuMech
         {
             MechJebModuleStageStats stats = Core.GetComputerModule<MechJebModuleStageStats>();
             stats.RequestUpdate();
-            return stats.AtmoStats.Sum(s => s.DeltaV);
+            return SumDeltaV(stats.AtmoStats);
         }
 
         [ValueInfoItem("#MechJeb_TotalDV_atmo_vac", InfoItem.Category.Vessel, units = "m/s", showInEditor = true)] //Total ΔV (atmo, vac)
         public string TotalDeltaVAtmosphereAndVac()
         {
-            MechJebModuleStageStats stats = Core.GetComputerModule<MechJebModuleStageStats>();
-            stats.RequestUpdate();
-
-            double atmDv = stats.AtmoStats.Sum(s => s.DeltaV);
-            double vacDv = stats.VacStats.Sum(s => s.DeltaV);
-
+            TotalDeltaVPair(out double atmDv, out double vacDv);
             return $"{atmDv:F0}, {vacDv:F0}";
         }
 
@@ -1044,14 +1096,38 @@ namespace MuMech
         public void LatLonClipbardCopy()
         {
             if (GUILayout.Button(Localizer.Format("#MechJeb_InfoItems_CopytoClipboard"))) //"Copy Lat/Lon/Alt to Clipboard"
+                CopyLatLonAltToClipboard();
+        }
+
+        // shared by the IMGUI item and the new UI
+        internal void CopyLatLonAltToClipboard()
+        {
+            var te = new TextEditor();
+            string result = "latitude =  " + VesselState.Latitude.ToString("F6") + "\nlongitude = " + VesselState.Longitude.ToString("F6") +
+                "\naltitude = " + Vessel.altitude.ToString("F2") + "\n";
+            te.text = result;
+            te.SelectAll();
+            te.Copy();
+        }
+
+        // "Name<Generic,Args>" of a pool's type, shared by the IMGUI item and the new UI
+        internal static string PoolName(Type type)
+        {
+            //string name = type.ToString();
+            if (typeof(IDisposable).IsAssignableFrom(type))
+                type = type.GetGenericArguments()[0];
+            StringBuilder name = StringBuilderCache.Acquire();
+            name.Append(type.Name);
+            Type[] generics = type.GetGenericArguments();
+            for (int i = 0; i < generics.Length; i++)
             {
-                var te = new TextEditor();
-                string result = "latitude =  " + VesselState.Latitude.ToString("F6") + "\nlongitude = " + VesselState.Longitude.ToString("F6") +
-                    "\naltitude = " + Vessel.altitude.ToString("F2") + "\n";
-                te.text = result;
-                te.SelectAll();
-                te.Copy();
+                if (i == 0) name.Append("<");
+                if (i > 0) name.Append(",");
+                name.Append(type.GetGenericArguments()[i].Name);
+                if (i == generics.Length - 1) name.Append(">");
             }
+
+            return name.ToStringAndRelease();
         }
 
         [GeneralInfoItem("#MechJeb_PoolsStatus", InfoItem.Category.Misc, showInEditor = true)] //Pools Status
@@ -1060,22 +1136,7 @@ namespace MuMech
             GUILayout.BeginVertical();
             foreach (KeyValuePair<Type, PoolsStatus> pair in PoolsStatus.poolsInfo)
             {
-                Type type = pair.Key;
-                //string name = type.ToString();
-                if (typeof(IDisposable).IsAssignableFrom(type))
-                    type = type.GetGenericArguments()[0];
-                StringBuilder name = StringBuilderCache.Acquire();
-                name.Append(type.Name);
-                Type[] generics = type.GetGenericArguments();
-                for (int i = 0; i < generics.Length; i++)
-                {
-                    if (i == 0) name.Append("<");
-                    if (i > 0) name.Append(",");
-                    name.Append(type.GetGenericArguments()[i].Name);
-                    if (i == generics.Length - 1) name.Append(">");
-                }
-
-                GuiUtils.SimpleLabel(name.ToStringAndRelease(), pair.Value.allocated + "/" + pair.Value.maxSize);
+                GuiUtils.SimpleLabel(PoolName(pair.Key), pair.Value.allocated + "/" + pair.Value.maxSize);
             }
 
             GUILayout.EndHorizontal();

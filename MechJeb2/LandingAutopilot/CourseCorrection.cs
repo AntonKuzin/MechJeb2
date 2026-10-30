@@ -30,7 +30,7 @@ namespace MuMech
 
                 if (currentError < 150)
                 {
-                    Core.Thrust.TargetThrottle = 0;
+                    Core.Thrust.ThrustOff();
                     if (Core.Landing.RCSAdjustment)
                         Core.RCS.Enabled = true;
                     return new CoastToDeceleration(Core);
@@ -46,7 +46,7 @@ namespace MuMech
                 // If a parachute has already been deployed then we will not be able to control attitude anyway, so move back to the coast to deceleration step.
                 if (VesselState.ParachuteDeployed)
                 {
-                    Core.Thrust.TargetThrottle = 0;
+                    Core.Thrust.ThrustOff();
                     return new CoastToDeceleration(Core);
                 }
 
@@ -61,11 +61,11 @@ namespace MuMech
                 Status = Localizer.Format("#MechJeb_LandingGuidance_Status3",
                     deltaV.magnitude.ToString("F1")); //"Performing course correction of about " +  + " m/s"
 
-                Core.Attitude.attitudeTo(deltaV.normalized, AttitudeReference.INERTIAL, Core.Landing);
+                Core.Attitude.AttitudeTo(deltaV.normalized, AttitudeReference.INERTIAL, Core.Landing);
 
-                if (Core.Attitude.attitudeAngleFromTarget() < 2)
+                if (Core.Attitude.AttitudeAngleFromTarget() < 2)
                     _courseCorrectionBurning = true;
-                else if (Core.Attitude.attitudeAngleFromTarget() > 30)
+                else if (Core.Attitude.AttitudeAngleFromTarget() > 30)
                     _courseCorrectionBurning = false;
 
                 if (_courseCorrectionBurning)
@@ -75,7 +75,7 @@ namespace MuMech
                 }
                 else
                 {
-                    Core.Thrust.TargetThrottle = 0;
+                    Core.Thrust.ThrustOff();
                 }
 
                 return this;

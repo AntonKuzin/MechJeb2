@@ -1,3 +1,8 @@
+/*
+ * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
+ * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
+ */
+
 using System.Collections.Generic;
 using MechJebLib.Functions;
 using MechJebLib.Primitives;
@@ -15,7 +20,8 @@ namespace MechJebLibTest.FunctionsTests
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         public void RandomOrbitalElementsForwardAndBack(int seed)
         {
             var rng = new Random(seed);

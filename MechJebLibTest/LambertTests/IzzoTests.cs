@@ -1,36 +1,31 @@
-﻿using System;
+/*
+ * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
+ * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
+ */
+
+using System;
 using System.Collections.Generic;
 using MechJebLib.Functions;
 using MechJebLib.Lambert;
 using MechJebLib.Maths;
 using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
-using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MechJebLibTest.LambertTests
 {
     public class IzzoTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public IzzoTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
         public static IEnumerable<object[]> Seeds()
         {
             for (int i = 0; i < 250; i++)
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomMultipleRevolution(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);
@@ -81,11 +76,10 @@ namespace MechJebLibTest.LambertTests
             }
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomMultipleRevolutionShortWay(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);
@@ -136,11 +130,10 @@ namespace MechJebLibTest.LambertTests
             }
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomPositions(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);
@@ -161,11 +154,10 @@ namespace MechJebLibTest.LambertTests
             rfShepperdRetrograde.ShouldEqual(rf, tol);
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomPositionsComparedToGooding(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);

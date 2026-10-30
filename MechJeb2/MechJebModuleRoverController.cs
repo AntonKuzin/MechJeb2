@@ -1,8 +1,9 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using static MechJebLib.Utils.Statics;
 
 namespace MuMech
 {
@@ -122,6 +123,13 @@ namespace MuMech
             base.OnStart(state);
         }
 
+        public override void OnDestroy()
+        {
+            GameEvents.onVesselWasModified.Remove(OnVesselModified);
+
+            base.OnDestroy();
+        }
+
         public void OnVesselModified(Vessel v)
         {
             // TODO : need to look into the new ModuleWheelSteering ModuleWheelMotor ModuleWheelBrakes ModuleWheelBase ModuleWheelSuspension and see what they could bring
@@ -200,7 +208,7 @@ namespace MuMech
             if (Core.Attitude.Users.Contains(this))
             {
                 //				line.enabled = false;
-                Core.Attitude.attitudeDeactivate();
+                Core.Attitude.AttitudeDeactivate();
                 Core.Attitude.Users.Remove(this);
             }
 
@@ -252,7 +260,7 @@ namespace MuMech
                             : speed; // speed used to go towards the waypoint, using the waypoints maxSpeed if set or just stick with the set speed
                     double minSpeed = wp.MinSpeed > 0 ? wp.MinSpeed :
                         nextWP != null ? TurningSpeed(nextWP.MaxSpeed > 0 ? nextWP.MaxSpeed : speed,
-                            MuUtils.ClampDegrees180(heading - HeadingToPos(wp.Position, nextWP.Position))) :
+                            Clamp180(heading - HeadingToPos(wp.Position, nextWP.Position))) :
                         distance - wp.Radius > 50 ? turnSpeed.Val : 1;
                     minSpeed = wp.Quicksave ? 1 : minSpeed;
                     // ^ speed used to go through the waypoint, using half the set speed or maxSpeed as minSpeed for routing waypoints (all except the last)
@@ -324,7 +332,7 @@ namespace MuMech
                 headingPID.INTAccum = Mathf.Clamp((float)headingPID.INTAccum, -1, 1);
 
                 double instantaneousHeading = VesselState.RotationVesselSurface.eulerAngles.y;
-                headingErr = MuUtils.ClampDegrees180(instantaneousHeading - heading);
+                headingErr = Clamp180(instantaneousHeading - heading);
                 if (s.wheelSteer == s.wheelSteerTrim || FlightGlobals.ActiveVessel != Vessel)
                 {
                     float limit = Math.Abs(curSpeed) > turnSpeed ? Mathf.Clamp((float)((turnSpeed + 6) / Square(curSpeed)), 0.1f, 1f) : 1f;
@@ -388,7 +396,7 @@ namespace MuMech
                 var quat = Quaternion.LookRotation(fwd, norm);
 
                 if (VesselState.TorqueAvailable.sqrMagnitude > 0)
-                    Core.Attitude.attitudeTo(quat, AttitudeReference.INERTIAL, this);
+                    Core.Attitude.AttitudeTo(quat, AttitudeReference.INERTIAL, this);
             }
 
             if (BrakeOnEnergyDepletion)
@@ -525,7 +533,7 @@ namespace MuMech
 
             if (!StabilityControl && Core.Attitude.Users.Contains(this))
             {
-                Core.Attitude.attitudeDeactivate();
+                Core.Attitude.AttitudeDeactivate();
                 Core.Attitude.Users.Remove(this);
             }
         }

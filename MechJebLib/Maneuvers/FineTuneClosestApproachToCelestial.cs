@@ -1,8 +1,12 @@
-﻿using System;
+/*
+ * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
+ * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
+ */
+
+using System;
 using System.Linq;
 using MechJebLib.Functions;
 using MechJebLib.Lambert;
-using MechJebLib.Maths;
 using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
 using MechJebLib.Utils;
@@ -97,7 +101,7 @@ namespace MechJebLib.Maneuvers
             DualV3 rsoi2 = rf1 + rsoi;
             DualV3 vsoi2 = vf1 + vsoi;
 
-            (DualV3 vi, DualV3 vf) = Izzo.Solve(1.0, r0Burn, rsoi2, dt2, _direction);
+            (DualV3 vi, DualV3 vf) = Russell.Solve(1.0, r0Burn, rsoi2, dt2, _direction);
             return (rsoi, vsoi, vi - v0Burn, vsoi2 - vf);
         }
 

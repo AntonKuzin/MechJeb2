@@ -9,32 +9,22 @@ using MechJebLib.Functions;
 using MechJebLib.Lambert;
 using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
-using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MechJebLibTest.LambertTests
 {
     public class GoodingTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public GoodingTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
         public static IEnumerable<object[]> Seeds()
         {
             for (int i = 0; i < 250; i++)
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomMultipleRevolution(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);
@@ -91,11 +81,10 @@ namespace MechJebLibTest.LambertTests
             }
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void RandomPositions(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             double tol = 1e-6;
 
             var random = new Random(seed);

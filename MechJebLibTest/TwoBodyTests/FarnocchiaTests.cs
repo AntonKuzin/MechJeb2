@@ -1,6 +1,6 @@
 /*
  * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
- * SPDX-License-Identifier: MIT-0 OR LGPL-2.1+ OR CC0-1.0
+ * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
 
 using System;
@@ -9,8 +9,8 @@ using MechJebLib.Functions;
 using MechJebLib.ODE;
 using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
+using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 using static MechJebLib.Utils.Statics;
 using static System.Math;
 using Random = System.Random;
@@ -19,20 +19,14 @@ namespace MechJebLibTest.TwoBodyTests
 {
     public class FarnocchiaTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public FarnocchiaTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
         public static IEnumerable<object[]> Seeds()
         {
             for (int i = 0; i <= 500; i++)
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         public void RandomForwardAndBack(int seed)
         {
             var rng = new Random(seed);
@@ -46,11 +40,33 @@ namespace MechJebLibTest.TwoBodyTests
 
             if ((rp - r0).magnitude / r0.magnitude > 1e-8 || (vp - v0).magnitude / v0.magnitude > 1e-8)
             {
-                _testOutputHelper.WriteLine(r0 + " " + v0);
+                Logger.Print(r0 + " " + v0);
             }
 
             rp.ShouldEqual(r0, 1e-8);
             vp.ShouldEqual(v0, 1e-8);
+        }
+
+        // Kepler's equation holds for negative and multi-rev mean anomalies (0.995 also exercises the near-parabolic branch)
+        [Theory]
+        [InlineData(0.0)]
+        [InlineData(0.3)]
+        [InlineData(0.7)]
+        [InlineData(0.9)]
+        [InlineData(0.98)]
+        [InlineData(0.995)]
+        public void NuFromDeltaTSatisfiesKepler(double ecc)
+        {
+            double n = Pow(1 - ecc, 1.5);
+
+            for (int i = -500; i <= 500; i++)
+            {
+                double M = 0.1 * i;
+                double nu = Farnocchia.NuFromDeltaT(M / n, ecc);
+                double M2 = Angles.MFromE(Angles.EFromNu(nu, ecc), ecc);
+
+                ClampPi(M2 - M).ShouldBeZero(1e-8);
+            }
         }
 
         private readonly VacuumKernel _ode = new VacuumKernel();
@@ -76,7 +92,8 @@ namespace MechJebLibTest.TwoBodyTests
             }
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         public void RandomComparedToDP5(int seed)
         {
             var solver = new DP5 { Rtol = 1e-6, Hmin = EPS, ThrowOnMaxIter = true, Maxiter = 2000 };
@@ -118,7 +135,7 @@ namespace MechJebLibTest.TwoBodyTests
 
             if (!NearlyEqual(rf, rf2, 1e-5) || !NearlyEqual(vf, vf2, 1e-5))
             {
-                _testOutputHelper.WriteLine("r0 :" + r0 + " v0:" + v0 + " dt:" + dt + " ecc:" + ecc + "\nrf:" + rf + " vf:" + vf + "\nrf2:" +
+                Logger.Print("r0 :" + r0 + " v0:" + v0 + " dt:" + dt + " ecc:" + ecc + "\nrf:" + rf + " vf:" + vf + "\nrf2:" +
                     rf2 + " vf2:" +
                     vf2 + "\n");
             }

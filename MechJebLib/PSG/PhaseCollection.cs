@@ -22,14 +22,18 @@ namespace MechJebLib.PSG
             return dup;
         }
 
+        // the coast in a burn-coast-burn (coast-during) sequence
+        public bool IsDuringCoast(int p) =>
+            p > 0 && this[p].Coast && this[p].MassContinuity && !this[p - 1].Coast && this[p - 1].AllowShutdown;
+
         public void SetControlContinuity()
         {
             this[0].ControlContinuity = false;
 
-            for (int p = 1; p < this.Count; p++)
+            for (int p = 1; p < Count; p++)
             {
                 bool thisUnCollocatedControl = this[p].Unguided || this[p].Coast;
-                bool prevUnCollocatedControl = this[p-1].Unguided || this[p-1].Coast;
+                bool prevUnCollocatedControl = this[p - 1].Unguided || this[p - 1].Coast;
                 bool eitherIsCoast = this[p].Coast || this[p - 1].Coast;
 
                 if ((thisUnCollocatedControl || prevUnCollocatedControl) && !eitherIsCoast)

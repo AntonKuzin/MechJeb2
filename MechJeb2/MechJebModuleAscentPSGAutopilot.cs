@@ -2,6 +2,7 @@ extern alias JetBrainsAnnotations;
 using System;
 using KSP.Localization;
 using UnityEngine;
+using static MechJebLib.Utils.Statics;
 
 /*
  * Optimized launches for RSS/RO
@@ -15,8 +16,6 @@ namespace MuMech
         {
         }
 
-        private MechJebModuleAscentSettings _ascentSettings => Core.AscentSettings;
-
         protected override void OnModuleEnabled()
         {
             base.OnModuleEnabled();
@@ -24,7 +23,6 @@ namespace MuMech
             _mode = AscentMode.VERTICAL_ASCENT;
             Core.Guidance.Users.Add(this);
             Core.Guidance.CascadeDisable(this); // disable this module if guidance is disabled
-            Core.Glueball.Users.Add(this);
         }
 
         protected override void OnModuleDisabled()
@@ -32,7 +30,7 @@ namespace MuMech
             base.OnModuleDisabled();
             Debug.Log("Disabling PSG Ascent Autopilot");
             Core.Guidance.Users.Remove(this);
-            Core.Glueball.Users.Remove(this);
+            Core.PSGSimulation.Users.Remove(this);
         }
 
         public override void Drive(FlightCtrlState s)
@@ -41,13 +39,17 @@ namespace MuMech
             {
                 if (TMinus <= AscentSettings.WarpCountDown)
                 {
-                    SetTarget();
+                    Core.PSGSimulation.Users.Add(this);
                     Core.Guidance.AssertStart(false);
+                }
+                else
+                {
+                    Core.PSGSimulation.Users.Remove(this);
                 }
             }
             else
             {
-                SetTarget();
+                Core.PSGSimulation.Users.Add(this);
                 Core.Guidance.AssertStart();
             }
 
@@ -66,6 +68,13 @@ namespace MuMech
 
         protected override bool DriveAscent2()
         {
+            // TODO: at some point we probably still need to:
+            // 1. model vertical rise and pitchover in the solver
+            // 2. freeze recomputation after launch
+            // 3. fly through maxQ using attitude-as-function-of-velocity (rather than time)
+            //    -- this should still handle thrust-fault failures by pitching up as we're not making enough velocity for our downrange
+            //       and should wind up riding Q-alpha limits
+            // 4. pick up closed-loop on the other side, after maxQ
             switch (_mode)
             {
                 case AscentMode.VERTICAL_ASCENT:
@@ -84,65 +93,40 @@ namespace MuMech
             return _mode != AscentMode.EXIT;
         }
 
-        private void SetTarget()
-        {
-            double peR = MainBody.Radius + AscentSettings.DesiredOrbitAltitude;
-            double apR = MainBody.Radius + AscentSettings.DesiredApoapsis;
-            if (_ascentSettings.DesiredApoapsis < 0)
-                apR = _ascentSettings.DesiredApoapsis;
-            double attR = MainBody.Radius +
-                (!AscentSettings.OptimizeStageFlag ? AscentSettings.DesiredAttachAltFixed : AscentSettings.DesiredAttachAlt);
-
-            bool lanflag = _ascentSettings.LaunchingToPlane || _ascentSettings.LaunchingToMatchLan || _ascentSettings.LaunchingToLan;
-            double lan = _ascentSettings.LaunchingToPlane || _ascentSettings.LaunchingToMatchLan
-                ? Core.Target.TargetOrbit.LAN
-                : (double)AscentSettings.DesiredLan;
-
-            double inclination = AscentSettings.DesiredInclination;
-            bool attachAltFlag = !AscentSettings.OptimizeStageFlag || AscentSettings.AttachAltFlag;
-
-            // if we are launchingToPlane other code in MJ fixes the sign of the inclination to be correct
-            // FIXME: can we just use autopilot.desiredInclination here and rely on the other code to update that value?
-            if (_ascentSettings.LaunchingToPlane)
-                inclination = Math.Sign(inclination) * Core.Target.TargetOrbit.inclination;
-
-            // FIXME: kinda need to break this up it is getting very magical with all the non-obvious ignored combinations of options
-            Core.Glueball.SetTarget(peR, apR, attR, inclination, lan, AscentSettings.DesiredFPA, attachAltFlag, lanflag);
-        }
-
         private double _pitchStartTime;
 
         private void DriveVerticalAscent()
         {
             //during the vertical ascent we just thrust straight up at max throttle
-            VerticalHeadingTo(Core.Guidance.Heading);
+            Core.Attitude.AttitudeToVerticalLaunch(Core.Guidance.Heading,
+                AscentSettings.ForceRoll && VesselState.AltitudeBottom > AscentSettings.RollAltitude, AscentSettings.VerticalRoll, this);
 
             bool liftedOff = Vessel.LiftedOff() && !Vessel.Landed;
 
             if (!liftedOff)
             {
-                Status = Localizer.Format("#MechJeb_Ascent_status12"); //"Awaiting liftoff"
+                SetStatus(Localizer.Format("#MechJeb_Ascent_status12")); //"Awaiting liftoff"
                 return;
             }
 
             if (VesselState.AltitudeBottom > AscentSettings.PitchStartHeight)
             {
                 _mode = AscentMode.PITCHPROGRAM;
-                _pitchStartTime = MET;
+                _pitchStartTime = VesselState.MET;
                 return;
             }
 
             double dh = AscentSettings.PitchStartHeight - VesselState.AltitudeBottom;
-            Status = $"Vertical ascent {dh:F2}m to go";
+            SetStatus($"Vertical ascent {dh:F2}m to go");
         }
 
         private void DrivePitchProgram()
         {
-            double dt = MET - _pitchStartTime;
+            double dt = VesselState.MET - _pitchStartTime;
             double theta = dt * AscentSettings.PitchRate;
             double pitch = 90 - theta;
 
-            Status = Localizer.Format("#MechJeb_Ascent_status15", $"{pitch - Core.Guidance.Pitch:F}"); //Pitch program <<1>>° to guidance
+            SetStatus(Localizer.Format("#MechJeb_Ascent_status15", $"{pitch - Core.Guidance.Pitch:F}")); //Pitch program <<1>>° to guidance
 
             if (CheckForGuidanceTransition(pitch))
             {
@@ -150,7 +134,7 @@ namespace MuMech
                 return;
             }
 
-            AttitudeTo(pitch, Core.Guidance.Heading);
+            Core.Attitude.LimitedAttitudeTo(Core.Guidance.Heading, pitch, AscentSettings.ForceRoll, AscentSettings.TurnRoll, ApplyAoALimiter, this);
         }
 
         private bool CheckForGuidanceTransition(double pitch)
@@ -173,16 +157,29 @@ namespace MuMech
             if (!Core.Guidance.IsStable())
             {
                 double pitch = Math.Min(Math.Min(90, SrfvelPitch()), VesselState.Pitch);
-                AttitudeTo(pitch, SrfvelHeading());
-                Status = Localizer.Format("#MechJeb_Ascent_status16"); //"WARNING: Unstable Guidance"
+                Core.Attitude.LimitedAttitudeTo(SrfvelHeading(), pitch, AscentSettings.ForceRoll, AscentSettings.TurnRoll, ApplyAoALimiter, this);
+                SetStatus(Localizer.Format("#MechJeb_Ascent_status16"), StatusLevel.WARNING); //"WARNING: Unstable Guidance"
             }
             else
             {
                 double ang = Vector3d.Angle(Core.Guidance.Inertial, VesselState.Forward);
-                // FIXME: should be able to set status color to yellow for ang > 2 and red for ang > 5 or so
-                Status = $"Stable Guidance: {ang:F}° deviation";
-                AttitudeTo(Core.Guidance.Inertial);
+                StatusLevel severity = ang > 5 ? StatusLevel.ERROR : ang > 1 ? StatusLevel.WARNING : StatusLevel.NORMAL;
+                SetStatus($"Stable Guidance: {ang:F}° deviation", severity);
+                Core.Attitude.LimitedAttitudeTo(Core.Guidance.Inertial, AscentSettings.ForceRoll, AscentSettings.TurnRoll, ApplyAoALimiter, this);
             }
+        }
+
+        private Vector3d ApplyAoALimiter(Vector3d desiredThrustVector)
+        {
+            double lim = Clamp(Core.PSGSimulation.LimitQa, 0, 10000);
+            AscentSettings.LimitingAoA = VesselState.DynamicPressure * Vector3.Angle(VesselState.SurfaceVelocity, desiredThrustVector) * UtilMath.Deg2Rad > lim;
+            if (AscentSettings.LimitingAoA)
+            {
+                CurrentMaxAoA = lim / VesselState.DynamicPressure * UtilMath.Rad2Deg;
+                desiredThrustVector = MathExtensions.RotateTowards(VesselState.SurfaceVelocity, desiredThrustVector, (float)(CurrentMaxAoA * UtilMath.Deg2Rad), 1).normalized;
+            }
+
+            return desiredThrustVector;
         }
     }
 }

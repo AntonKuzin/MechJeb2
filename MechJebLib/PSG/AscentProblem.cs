@@ -18,6 +18,13 @@ namespace MechJebLib.PSG
         public readonly Dictionary<int, string> ConstraintNames = new Dictionary<int, string>();
         private bool _firstPass;
 
+        // FIXME: this should be more principled scaling.  The wild guess I made of 100 based on just getting
+        // better observed convergence behavior turns out to be a pretty decent guess.  It results in row-infinity-norm
+        // jacobians of around 7 for Earth and around 1/7 for Kerbin.  It would be better to more adaptively normalize
+        // the constraints based on which partial was largest so that it autoscaled for Earth/Kerbin/Eve/etc and produced
+        // values closer to 1.
+        public const double FUDGE_FACTOR = 100; // hardcoded scaling factor for the aero path constraints
+
         public AscentProblem(Optimizer optimizer)
         {
             _optimizer = optimizer;
@@ -52,6 +59,8 @@ namespace MechJebLib.PSG
             ci = DynamicPressureConstraints(f, j, ci);
 
             ci = ThrustMagnitudeConstraints(f, j, ci);
+
+            ci = ZeroCoastConstraint(f, j, ci);
 
             ci = ControlNormConstraints(f, j, ci);
 
@@ -110,6 +119,49 @@ namespace MechJebLib.PSG
 
                     ci = ApplyScalarConstraint(f, j, ci, x => x[0], new[] { thisPhase.T[k] }, new[] { thisPhase.T.Idx(k) });
                 }
+            }
+
+            return ci;
+        }
+
+        // This is another smoothed Fischer-Burmeister complementarity constraint to drive the first burn in a burn-coast-burn
+        // to zero as the coast length goes to zero.  When the coast is zero the problem is degenerate and without a gradient
+        // to follow the optimizer can stall.
+        // FIXME: it seems that some problems which do have a coast solution can take longer to solve with these constraints
+        // active--which is likely a bug in the AscentGuesser where the guess is so bad they shrink the coast to zero and
+        // bounce around until it expands again, and these constraints become pure additional cost.
+        private int ZeroCoastConstraint(double[] f, alglib.sparsematrix j, int ci)
+        {
+            for (int p = 0; p < _optimizer.Phases.Count; p++)
+            {
+                if (!_optimizer.Phases.IsDuringCoast(p))
+                    continue;
+
+                if (_firstPass) ConstraintNames[ci] = $"Zero coast constraint for phase {p}";
+
+                double eps = Min(_optimizer.ZeroCoastTime / _optimizer.Problem.Scale.TimeScale, 0.5 * _optimizer.Phases[p].MaxT);
+
+                if (eps <= 0)
+                {
+                    f[ci++] = 0;
+                    alglib.sparseappendemptyrow(j);
+                    continue;
+                }
+
+                PhaseProxy burnPhase = _vars[p - 1];
+                PhaseProxy coastPhase = _vars[p];
+                double btRef = _optimizer.Phases[p - 1].Bt;
+
+                // fraction of the stage burned before the coast
+                double a = burnPhase.Bt() / btRef;
+                // positive when the coast is shorter than the minimum coast
+                double b = 1.0 - coastPhase.Bt() / eps;
+                double sqrtU = Sqrt(a * a + b * b + 2 * _optimizer.ZeroCoastMu);
+
+                f[ci++] = sqrtU - (a + b);
+                alglib.sparseappendemptyrow(j);
+                alglib.sparseappendelement(j, burnPhase.BtIdx(), (a / sqrtU - 1) / btRef);
+                alglib.sparseappendelement(j, coastPhase.BtIdx(), (1 - b / sqrtU) / eps);
             }
 
             return ci;
@@ -282,6 +334,23 @@ namespace MechJebLib.PSG
             return ci;
         }
 
+        // Density relative to the surface. Typical exponential model with a scale height of h0, but changing to a
+        // scale height of roughly rBody under the surface. The transition is c0/c1-smooth for the SQP solver.
+        // This keeps the model from spitting out numerically crazy numbers (~e^(rBody/h0)) under the surface.
+        // FIXME: should probably be combined with a |r| > rBody constraint
+        // FIXME: AscentGuesser should not provide nonsense
+        public static Dual NormalizedDensity(Dual r, double rBody, double h0)
+        {
+            Dual x = (r - rBody) / h0;
+
+            if (x.M >= 0)
+                return Dual.Exp(-x);
+
+            double a = h0 / rBody;
+
+            return Dual.Exp(-a * x - (1 - a) * (Dual.Exp(x) - 1));
+        }
+
         private int DynamicPressureConstraints(double[] f, alglib.sparsematrix j, int ci)
         {
             double rho0InvQAlphaMax = _optimizer.Problem.Rho0InvQAlphaMax;
@@ -339,10 +408,10 @@ namespace MechJebLib.PSG
             {
                 Dual rm = r.magnitude;
                 DualV3 vr = v - DualV3.Cross(w, r);
-                Dual q = 0.5 * rho0InvQAlphaMax * Dual.Exp(-(rm - rBody) / h0) * vr.sqrMagnitude;
-                Dual alpha = DualV3.AngleUnit(vr.normalized, u * V3.forward);
+                Dual q = 0.5 * rho0InvQAlphaMax * NormalizedDensity(rm, rBody, h0) * vr.sqrMagnitude;
+                Dual alpha = DualV3.AngleUnit(vr.normalized, u.forward);
 
-                return q * alpha / 100.0;
+                return q * alpha / FUDGE_FACTOR;
             }
 
             Dual QConstraint(DualV3[] x)
@@ -352,9 +421,9 @@ namespace MechJebLib.PSG
 
                 Dual rm = r.magnitude;
                 DualV3 vr = v - DualV3.Cross(w, r);
-                Dual q = 0.5 * rho0InvQMax * Dual.Exp(-(rm - rBody) / h0) * vr.sqrMagnitude;
+                Dual q = 0.5 * rho0InvQMax * NormalizedDensity(rm, rBody, h0) * vr.sqrMagnitude;
 
-                return q / 100.0;
+                return q / FUDGE_FACTOR;
             }
         }
 
@@ -370,8 +439,10 @@ namespace MechJebLib.PSG
             double rho0CdAref = _optimizer.Problem.Rho0CdAref;
             double rBody = _optimizer.Problem.RBody;
             double h0 = _optimizer.Problem.H0;
-            double r0 = _optimizer.Problem.R0.magnitude;
             V3 w = _optimizer.Problem.W;
+
+            // ambient pressure relative to the launch site, assuming pressure scales with density
+            double invDensityR0 = h0 > 0 ? 1.0 / NormalizedDensity(_optimizer.Problem.R0.magnitude, rBody, h0).M : 0;
 
             // dynamical constraints per phase
             for (int n = 0; n < _optimizer.N; n++)
@@ -430,7 +501,7 @@ namespace MechJebLib.PSG
                     u1 = u2 = thisPhase.U.First;
                     u1Idx = u2Idx = thisPhase.U.FirstIdx;
                     // TODO: we could support fully collocated thrust for throtlleable solids
-                    // TODO: unguided coasts shoudn't have throttle
+                    // TODO: unguided coasts shouldn't have throttle
                     t1 = t2 = thisPhase.T.First;
                     t1Idx = t2Idx = thisPhase.T.FirstIdx;
                 }
@@ -518,7 +589,7 @@ namespace MechJebLib.PSG
             DualV3 VDotVacuum(ref GaussLegendreDualPoint d)
             {
                 Dual r3 = d.R.sqrMagnitude * d.R.magnitude;
-                return -d.R / r3 + vacThrust / d.M * (d.U * V3.forward) * d.T;
+                return -d.R / r3 + vacThrust / d.M * d.U.forward * d.T;
             }
 
             DualV3 VDotAtmo(ref GaussLegendreDualPoint d)
@@ -526,12 +597,12 @@ namespace MechJebLib.PSG
                 Dual r = d.R.magnitude;
                 Dual r3 = d.R.sqrMagnitude * r;
                 DualV3 vr = d.V - DualV3.Cross(w, d.R);
-                var normAtmosphere = Dual.Exp(-(r - rBody) / h0);
-                var normAtmosphere2 = Dual.Exp(-(r - r0) / h0);
+                Dual normAtmosphere = NormalizedDensity(r, rBody, h0);
+                Dual normAtmosphere2 = normAtmosphere * invDensityR0;
                 DualV3 drag = 0.5 * rho0CdAref * normAtmosphere * vr.sqrMagnitude * vr.normalized;
                 //T = ṁ [v_e_sl + (v_e_vac - v_e_sl)(1 - p_amb/p₀)]
                 Dual thrust = mdot * (vexCurrent + (vexVacuum - vexCurrent) * (1.0 - normAtmosphere2));
-                return -d.R / r3 + thrust / d.M * (d.U * V3.forward) * d.T - drag / d.M;
+                return -d.R / r3 + thrust / d.M * d.U.forward * d.T - drag / d.M;
             }
         }
 
@@ -546,7 +617,7 @@ namespace MechJebLib.PSG
             // cost metric
             switch (_optimizer.Objective)
             {
-                case Optimizer.ObjectiveType.MIN_TIME:
+                case Optimizer.ObjectiveType.MIN_TIME: // this doesn't work for throttleable stages
                     alglib.sparseappendemptyrow(j);
 
                     for (int p = 0; p < _optimizer.Phases.Count; p++)
@@ -564,10 +635,24 @@ namespace MechJebLib.PSG
                     f[ci++] = val;
 
                     break;
-                case Optimizer.ObjectiveType.MAX_MASS: // this doesn't work for upper stages with fixed burntimes
-                    f[ci++] = -lastPhase.M.Last;
+                case Optimizer.ObjectiveType.MIN_MASS_BURNED: // seems slower than MIN_THRUST_ACCEL in tests
+
                     alglib.sparseappendemptyrow(j);
-                    alglib.sparseappendelement(j, lastPhase.M.LastIdx, -1.0);
+
+                    double sum = 0;
+
+                    for (int p = 0; p < _optimizer.Phases.Count; p++)
+                    {
+                        if (_optimizer.Phases[p].Coast || !_optimizer.Phases[p].AllowShutdown)
+                            continue;
+                        PhaseProxy thisPhase = _vars[p];
+
+                        sum += thisPhase.M.First - thisPhase.M.Last;
+                        alglib.sparseappendelement(j, thisPhase.M.FirstIdx, 1.0);
+                        alglib.sparseappendelement(j, thisPhase.M.LastIdx, -1.0);
+                    }
+
+                    f[ci++] = sum;
 
                     break;
                 case Optimizer.ObjectiveType.MAX_ENERGY:
@@ -579,7 +664,7 @@ namespace MechJebLib.PSG
                     ci = ApplyScalarConstraintV3(f, j, ci, MaxOrbitalEnergyObjective, new[] { rf, vf }, new[] { ri, vi });
 
                     break;
-                case Optimizer.ObjectiveType.MIN_THRUST_ACCEL: // TODO: fix this
+                case Optimizer.ObjectiveType.MIN_THRUST_ACCEL:
                     {
                         using var jac = Vec.Rent(_vars.TotalVariables, true);
 
@@ -588,49 +673,26 @@ namespace MechJebLib.PSG
                             if (_optimizer.Phases[p].Coast || !_optimizer.Phases[p].AllowShutdown)
                                 continue;
 
+                            Phase phase = _optimizer.Phases[p];
+                            double maxThrust = phase.VacThrust;
                             PhaseProxy thisPhase = _vars[p];
-
-                            double thrust = _optimizer.Phases[p].VacThrust;
-                            double den = (_optimizer.N - 1) * 6;
-                            double h6 = thisPhase.Bt() / den;
+                            double bt = thisPhase.Bt();
+                            double h2 = 0.5 * bt / _optimizer.N;
 
                             for (int k = 0; k < _optimizer.K; k += 1)
                             {
-                                double mk = thisPhase.M[k];
-                                double u = thisPhase.U[k].magnitude;
-                                double ux = thisPhase.UX[k];
-                                double uy = thisPhase.UY[k];
-                                double uz = thisPhase.UZ[k];
-
-                                if (k == 0 || k == _optimizer.K - 1)
-                                {
-                                    val += u * thrust * h6 / mk;
-                                    jac[thisPhase.M.Idx(k)] = -u * thrust * h6 / (mk * mk);
-                                    jac[thisPhase.UX.Idx(k)] = ux * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UY.Idx(k)] = uy * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UZ.Idx(k)] = uz * thrust * h6 / (u * mk);
-                                    jac[thisPhase.BtIdx()] += u * thrust / mk / den;
+                                if (k % 3 == 0)
                                     continue;
-                                }
 
-                                if (k % 2 == 0)
-                                {
-                                    val += u * thrust * h6 * 2.0 / mk;
-                                    jac[thisPhase.M.Idx(k)] = -2.0 * u * thrust * h6 / (mk * mk);
-                                    jac[thisPhase.UX.Idx(k)] = 2.0 * ux * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UY.Idx(k)] = 2.0 * uy * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UZ.Idx(k)] = 2.0 * uz * thrust * h6 / (u * mk);
-                                    jac[thisPhase.BtIdx()] += 2.0 * u * thrust / mk / den;
-                                }
-                                else
-                                {
-                                    val += u * thrust * h6 * 4.0 / mk;
-                                    jac[thisPhase.M.Idx(k)] = -4.0 * u * thrust * h6 / (mk * mk);
-                                    jac[thisPhase.UX.Idx(k)] = 4.0 * ux * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UY.Idx(k)] = 4.0 * uy * thrust * h6 / (u * mk);
-                                    jac[thisPhase.UZ.Idx(k)] = 4.0 * uz * thrust * h6 / (u * mk);
-                                    jac[thisPhase.BtIdx()] += 4.0 * u * thrust / mk / den;
-                                }
+                                double mk = thisPhase.M[k];
+                                double tk = _optimizer.Phases[p].Unguided ? 1.0 : thisPhase.T[k];
+
+                                val += h2 * tk * maxThrust / mk;
+
+                                jac[thisPhase.M.Idx(k)] = -h2 * tk * maxThrust / (mk * mk);
+                                if (!_optimizer.Phases[p].Unguided)
+                                    jac[thisPhase.T.Idx(k)] = h2 * maxThrust / mk;
+                                jac[thisPhase.BtIdx()] += 0.5 * tk * maxThrust / mk / _optimizer.N;
                             }
                         }
 

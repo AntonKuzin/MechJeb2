@@ -11,7 +11,6 @@ using MechJebLib.Primitives;
 using MechJebLib.TwoBody;
 using MechJebLib.Utils;
 using Xunit;
-using Xunit.Abstractions;
 using static System.Math;
 using static MechJebLib.Utils.Statics;
 
@@ -19,24 +18,16 @@ namespace MechJebLibTest.ManeuversTests
 {
     public class ReturnFromMoonTests
     {
-        private readonly ITestOutputHelper _testOutputHelper;
-
-        public ReturnFromMoonTests(ITestOutputHelper testOutputHelper)
-        {
-            _testOutputHelper = testOutputHelper;
-        }
-
         public static IEnumerable<object[]> Seeds()
         {
             for (int i = 0; i <= 25; i++)
                 yield return new object[] { i };
         }
 
-        [Theory, MemberData(nameof(Seeds))]
+        [Theory]
+        [MemberData(nameof(Seeds))]
         private void NextManeuverToReturnFromMoonRandomTest(int seed)
         {
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
-
             // this forces JIT compilation(?) of the SQL solver which takes ~250ms
             ChangeOrbitalElement.ChangePeriapsis(1.0, new V3(1, 0, 0), new V3(0, 1.0, 0), 1.0);
 
@@ -79,7 +70,7 @@ namespace MechJebLibTest.ManeuversTests
             V3 r3 = moonR2 + r2;
             V3 v3 = moonV2 + v2;
 
-            _testOutputHelper.WriteLine($"periapsis: {Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3)}");
+            Logger.Print($"periapsis: {Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3)}");
 
             Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3).ShouldEqual(PER, 1e-2);
         }
@@ -101,7 +92,6 @@ namespace MechJebLibTest.ManeuversTests
 
             var solver = new ReturnFromMoon();
 
-            Logger.Register(o => _testOutputHelper.WriteLine((string)o));
             const double CENTRAL_MU = 398600435436096;
             const double MOON_MU    = 4902800066163.8;
             var          moonR0     = new V3(325420116.073166, -166367503.579338, -138858150.96145);
@@ -123,7 +113,7 @@ namespace MechJebLibTest.ManeuversTests
             V3 r3 = moonR2 + r2;
             V3 v3 = moonV2 + v2;
 
-            _testOutputHelper.WriteLine($"periapsis: {Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3)}");
+            Logger.Print($"periapsis: {Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3)}");
 
             Astro.PeriapsisFromStateVectors(CENTRAL_MU, r3, v3).ShouldEqual(PER, 1e-2);
             if (dvOpt > 0)

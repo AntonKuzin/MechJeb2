@@ -29,7 +29,7 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
 
     public class SimModuleEngines : SimPartModule
     {
-        private static readonly ObjectPool<SimModuleEngines> _pool = new ObjectPool<SimModuleEngines>(New, Clear);
+        private static readonly ObjectPool<SimModuleEngines> _pool = new ObjectPool<SimModuleEngines>(New, m => m.Clear());
 
         public readonly List<SimPropellant> Propellants = new List<SimPropellant>();
         public readonly Dictionary<int, SimFlowMode> PropellantFlowModes = new Dictionary<int, SimFlowMode>();
@@ -175,25 +175,28 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             return engine;
         }
 
+        protected override void Clear()
+        {
+            base.Clear();
+            AutoCutoff = false;
+            Ullage = false;
+            ThrustDirectionVectors.Clear();
+            PropellantFlowModes.Clear();
+            ResourceConsumptions.Clear();
+            Propellants.Clear();
+            ThrustTransformMultipliers.Clear();
+            ThrustCurve.Clear();
+            ThrottleIspCurve.Clear();
+            ThrottleIspCurveAtmStrength.Clear();
+            VelCurve.Clear();
+            VelCurveIsp.Clear();
+            ATMCurve.Clear();
+            ATMCurveIsp.Clear();
+            AtmosphereCurve.Clear();
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static SimModuleEngines New() => new SimModuleEngines();
-
-        private static void Clear(SimModuleEngines m)
-        {
-            m.ThrustDirectionVectors.Clear();
-            m.PropellantFlowModes.Clear();
-            m.ResourceConsumptions.Clear();
-            m.Propellants.Clear();
-            m.ThrustTransformMultipliers.Clear();
-            m.ThrustCurve.Clear();
-            m.ThrottleIspCurve.Clear();
-            m.ThrottleIspCurveAtmStrength.Clear();
-            m.VelCurve.Clear();
-            m.VelCurveIsp.Clear();
-            m.ATMCurve.Clear();
-            m.ATMCurveIsp.Clear();
-            m.AtmosphereCurve.Clear();
-        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool DrawingFuelFromPartDroppedInStage(SimPart p, int resourceId, int stageNum) =>
@@ -205,6 +208,51 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             for (int i = 0; i < parts.Count; i++)
                 if (PartHasResource(parts[i], resourceId) && parts[i].DecoupledInStage == stageNum)
                     return true;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool PartHasCapacityFor(SimPart p, int resourceId) =>
+            p.TryGetResource(resourceId, out SimResource resource) && resource.MaxAmount > p.ResourceRequestRemainingThreshold;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool PartsDroppedInStageHaveCapacityFor(IList<SimPart> parts, int resourceId, int stageNum)
+        {
+            for (int i = 0; i < parts.Count; i++)
+                if (parts[i].DecoupledInStage == stageNum && PartHasCapacityFor(parts[i], resourceId))
+                    return true;
+            return false;
+        }
+
+        // true if the engine can draw on a tank which is dropped along with it in stageNum, whether or not that tank is empty yet.
+        // this uses the capacity, so that the engine still has its drop tanks after it has drained them.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool HasDropTanks(int stageNum)
+        {
+            SimVessel vessel = Part.Vessel;
+
+            foreach (int resourceId in ResourceConsumptions.Keys)
+                switch (PropellantFlowModes[resourceId])
+                {
+                    case SimFlowMode.NO_FLOW:
+                        if (Part.DecoupledInStage == stageNum && PartHasCapacityFor(Part, resourceId))
+                            return true;
+                        break;
+                    case SimFlowMode.ALL_VESSEL:
+                    case SimFlowMode.ALL_VESSEL_BALANCE:
+                    case SimFlowMode.STAGE_PRIORITY_FLOW:
+                    case SimFlowMode.STAGE_PRIORITY_FLOW_BALANCE:
+                        if (PartsDroppedInStageHaveCapacityFor(vessel.PartsRemainingInStage[vessel.CurrentStage], resourceId, stageNum))
+                            return true;
+                        break;
+                    case SimFlowMode.STAGE_STACK_FLOW:
+                    case SimFlowMode.STAGE_STACK_FLOW_BALANCE:
+                    case SimFlowMode.STACK_PRIORITY_SEARCH:
+                        if (PartsDroppedInStageHaveCapacityFor(Part.CrossFeedPartSet, resourceId, stageNum))
+                            return true;
+                        break;
+                }
+
             return false;
         }
 
@@ -391,20 +439,25 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             }
         }
 
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public EngineSignature Signature() => new EngineSignature(Part.PersistentId, Index);
+
         public override string ToString()
         {
             var sb = new StringBuilder();
             sb.AppendLine(ModuleLine("SimModuleEngines", CommonFieldList()));
             sb.AppendLine(Invariant(
                 $"  IsOperational={IsOperational} IsEnabled={IsEnabled} IsUnrestartableDeadEngine={IsUnrestartableDeadEngine} NoPropellants={NoPropellants}"));
-            sb.AppendLine(Invariant($"  MaxFuelFlow={MaxFuelFlow} MinFuelFlow={MinFuelFlow} MaxThrust={MaxThrust} MinThrust={MinThrust} G={G}"));
+            // the floats are G9 and the doubles G17 so the values round-trip into test fixtures
+            sb.AppendLine(Invariant($"  MaxFuelFlow={MaxFuelFlow:G9} MinFuelFlow={MinFuelFlow:G9} MaxThrust={MaxThrust:G9} MinThrust={MinThrust:G9} G={G:G9}"));
             sb.AppendLine(Invariant(
-                $"  ThrottleLocked={ThrottleLocked} ThrottleLimiter={ThrottleLimiter} MultIsp={MultIsp} MultFlow={MultFlow} FlowMultiplier={FlowMultiplier}"));
-            sb.AppendLine(Invariant($"  Clamp={Clamp} FlowMultCap={FlowMultCap} FlowMultCapSharpness={FlowMultCapSharpness}"));
+                $"  ThrottleLocked={ThrottleLocked} ThrottleLimiter={ThrottleLimiter:G9} MultIsp={MultIsp:G9} MultFlow={MultFlow:G17} FlowMultiplier={FlowMultiplier:G17}"));
+            sb.AppendLine(Invariant($"  Clamp={Clamp:G9} FlowMultCap={FlowMultCap:G9} FlowMultCapSharpness={FlowMultCapSharpness:G9}"));
             sb.AppendLine(Invariant(
                 $"  AtmChangeFlow={AtmChangeFlow} UseAtmCurve={UseAtmCurve} UseAtmCurveIsp={UseAtmCurveIsp} UseThrottleIspCurve={UseThrottleIspCurve} UseThrustCurve={UseThrustCurve} UseVelCurve={UseVelCurve} UseVelCurveIsp={UseVelCurveIsp}"));
             sb.AppendLine(Invariant(
-                $"  ModuleResiduals={ModuleResiduals} ModuleSpoolupTime={ModuleSpoolupTime} AutoCutoff={AutoCutoff} IsModuleEnginesRf={IsModuleEnginesRf} Ullage={Ullage}"));
+                $"  ModuleResiduals={ModuleResiduals:G17} ModuleSpoolupTime={ModuleSpoolupTime:G17} AutoCutoff={AutoCutoff} IsModuleEnginesRf={IsModuleEnginesRf} Ullage={Ullage}"));
 
             void AppendCurve(string name, DoubleInterpolant curve)
             {
@@ -424,7 +477,7 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
 
             sb.Append("  ThrustTransformMultipliers:");
             foreach (double m in ThrustTransformMultipliers)
-                sb.Append(Invariant($" {m}"));
+                sb.Append(Invariant($" {m:G17}"));
             sb.AppendLine();
 
             sb.Append("  ThrustDirectionVectors:");
@@ -435,7 +488,7 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             sb.Append("  Propellants:");
             foreach (SimPropellant p in Propellants)
                 sb.Append(Invariant(
-                    $" [id={p.id} ignoreForIsp={p.ignoreForIsp} ratio={p.ratio} flowMode={p.FlowMode} density={p.density}]"));
+                    $" [id={p.id} ignoreForIsp={p.ignoreForIsp} ratio={p.ratio:G17} flowMode={p.FlowMode} density={p.density:G17}]"));
             return sb.ToString();
         }
     }

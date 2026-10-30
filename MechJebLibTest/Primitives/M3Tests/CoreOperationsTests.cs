@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
 
+using System;
 using MechJebLib.Primitives;
 using Xunit;
 using static MechJebLib.Utils.Statics;
@@ -48,6 +49,18 @@ namespace MechJebLibTest.Primitives.M3Tests
             one[2, 0].ShouldEqual(7);
             one[2, 1].ShouldEqual(8);
             one[2, 2].ShouldEqual(9);
+        }
+
+        [Fact]
+        private void TwoDimensionalAccessOutOfRange()
+        {
+            var m = new M3(1, 2, 3, 4, 5, 6, 7, 8, 9);
+
+            // the first three used to alias other elements through the flattened index
+            Assert.Throws<IndexOutOfRangeException>(() => m[3, 0]);
+            Assert.Throws<IndexOutOfRangeException>(() => m[-1, 1]);
+            Assert.Throws<IndexOutOfRangeException>(() => m[4, -1]);
+            Assert.Throws<IndexOutOfRangeException>(() => m[0, 3]);
         }
 
         [Fact]
@@ -603,15 +616,17 @@ namespace MechJebLibTest.Primitives.M3Tests
         [Fact]
         private void MaxMagnitudeNegativeElements()
         {
-            new M3(-1, -2, -3, -4, -5, -6, -7, -8, -9).max_magnitude.ShouldEqual(-1.0);
-            new M3(-9, -8, -7, -6, -5, -4, -3, -2, -1).max_magnitude.ShouldEqual(-1.0);
+            new M3(-1, -2, -3, -4, -5, -6, -7, -8, -9).max_magnitude.ShouldEqual(9.0);
+            new M3(-9, -8, -7, -6, -5, -4, -3, -2, -1).max_magnitude.ShouldEqual(9.0);
         }
 
         [Fact]
         private void MaxMagnitudeMixedElements()
         {
-            new M3(-5, 3, 2, 1, 0, -1, -2, -3, 4).max_magnitude.ShouldEqual(4.0);
+            new M3(-5, 3, 2, 1, 0, -1, -2, -3, 4).max_magnitude.ShouldEqual(5.0);
+            new M3(-3, 3, 2, 1, 0, -1, -2, -3, 4).max_magnitude.ShouldEqual(4.0);
             new M3(0, 0, 0, 0, 10, 0, 0, 0, 0).max_magnitude.ShouldEqual(10.0);
+            new M3(0, 0, 0, 0, -10, 0, 0, 0, 0).max_magnitude.ShouldEqual(10.0);
         }
 
         [Fact]
@@ -631,15 +646,17 @@ namespace MechJebLibTest.Primitives.M3Tests
         [Fact]
         private void MinMagnitudeNegativeElements()
         {
-            new M3(-1, -2, -3, -4, -5, -6, -7, -8, -9).min_magnitude.ShouldEqual(-9.0);
-            new M3(-9, -8, -7, -6, -5, -4, -3, -2, -1).min_magnitude.ShouldEqual(-9.0);
+            new M3(-1, -2, -3, -4, -5, -6, -7, -8, -9).min_magnitude.ShouldEqual(1.0);
+            new M3(-9, -8, -7, -6, -5, -4, -3, -2, -1).min_magnitude.ShouldEqual(1.0);
         }
 
         [Fact]
         private void MinMagnitudeMixedElements()
         {
-            new M3(-5, 3, 2, 1, 0, -1, -2, -3, 4).min_magnitude.ShouldEqual(-5.0);
-            new M3(1, 2, 3, 4, -10, 6, 7, 8, 9).min_magnitude.ShouldEqual(-10.0);
+            new M3(-5, 3, 2, 1, 0, -1, -2, -3, 4).min_magnitude.ShouldEqual(0.0);
+            new M3(1, 2, 3, 4, -10, 6, 7, 8, 9).min_magnitude.ShouldEqual(1.0);
+            new M3(-1, 2, 3, 4, -10, 6, 7, 8, 9).min_magnitude.ShouldEqual(1.0);
+            new M3(2, 2, 3, 4, -10, 6, 7, 8, 9).min_magnitude.ShouldEqual(2.0);
         }
 
         [Fact]

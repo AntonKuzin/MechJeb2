@@ -1,9 +1,10 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.Collections.Generic;
 using JetBrainsAnnotations::JetBrains.Annotations;
 using KSP.Localization;
 using UnityEngine;
+using static MechJebLib.Utils.Statics;
 
 namespace MuMech
 {
@@ -22,6 +23,25 @@ namespace MuMech
         {
             double angularDelta = distance * UtilMath.Rad2Deg / (alt + o.referenceBody.Radius);
             angle += angularDelta;
+        }
+
+        // what DoParametersGUI does besides drawing, for the new UI
+        internal override void ViewUpdate(Orbit o, double UT, MechJebModuleTargetController targetController)
+        {
+            if (!targetController.PositionTargetExists)
+            {
+                targetController.SetPositionTarget(o.referenceBody, targetLatitude, targetLongitude);
+            }
+
+            targetLatitude = 0;
+            targetLongitude = targetController.targetLongitude;
+        }
+
+        // the ◄ / ► buttons
+        internal void MoveTargetLongitude(double distance, Orbit o, MechJebModuleTargetController targetController)
+        {
+            double asl = o.referenceBody.TerrainAltitude(targetController.targetLatitude, targetController.targetLongitude);
+            MoveByMeter(ref targetController.targetLongitude, distance, asl, o);
         }
 
         public override void DoParametersGUI(Orbit o, double UT, MechJebModuleTargetController targetController)
@@ -78,7 +98,7 @@ namespace MuMech
             double currentBodyRotationRad = (o.referenceBody.rotationAngle + 360.0 * (ut / o.referenceBody.rotationPeriod)) * Math.PI / 180.0;
 
             double targMNA = targetLongitude * Math.PI / 180.0 + currentBodyRotationRad;
-            targMNA = (targMNA % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+            targMNA = Clamp2Pi(targMNA);
             double syncAlt = syncSMA - o.referenceBody.Radius;
             Vector3d targetWorldPos = o.referenceBody.GetWorldSurfacePosition(0, targetLongitude, syncAlt);
             Vector3d radiusVector = targetWorldPos - o.referenceBody.position;

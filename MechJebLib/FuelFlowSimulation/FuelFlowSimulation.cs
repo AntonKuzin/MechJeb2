@@ -18,7 +18,9 @@ namespace MechJebLib.FuelFlowSimulation
         private const int MAXSTEPS = 10_000;
 
         public readonly List<FuelStats> Segments = new List<FuelStats>();
-        private FuelStats _currentSegment;
+
+        // ReSharper disable once NullableWarningSuppressionIsUsed
+        private FuelStats _currentSegment = null!;
         private double _time;
         public bool DVLinearThrust = true; // include cos losses
         private readonly HashSet<SimPart> _partsWithResourceDrains = new HashSet<SimPart>();
@@ -41,20 +43,40 @@ namespace MechJebLib.FuelFlowSimulation
             Segments.Clear();
             vessel.MainThrottle = 1.0;
 
-            vessel.ActivateEnginesAndRCS();
-
-            while (vessel.CurrentStage >= 0) // FIXME: should stop mutating vessel.CurrentStage
+            try
             {
-                SimulateStage(vessel);
-                ClearResiduals();
-                ComputeRcsMaxValues(vessel);
-                FinishSegment(vessel);
-                vessel.Stage();
+                vessel.ActivateEnginesAndRCS();
+
+                while (vessel.CurrentStage >= 0) // FIXME: should stop mutating vessel.CurrentStage
+                {
+                    CancelToken.ThrowIfCancellationRequested();
+                    SimulateStage(vessel);
+                    ClearResiduals();
+                    ComputeRcsMaxValues(vessel);
+                    FinishSegment(vessel);
+                    vessel.Stage();
+                }
+
+                Segments.Reverse();
             }
+            finally
+            {
+                ClearRunState();
+            }
+        }
 
-            Segments.Reverse();
+        // the vessel can be rebuilt between runs, which hands its parts back to the pool and on to the other simulation, so
+        // however the run ends (including cancelled or faulted) we take our drains off the parts and stop holding them.
+        private void ClearRunState()
+        {
+            ClearResourceDrainsAndResiduals();
+            ClearRcsDrains();
+            _partsWithRCSDrains2.Clear();
+            _sources.Clear();
+            _sourcesRCS.Clear();
 
-            _partsWithResourceDrains.Clear();
+            // ReSharper disable once NullableWarningSuppressionIsUsed
+            _currentSegment = null!;
 
             if (!_halfStageIsDetected)
                 vessel.HalfStageIndex = -1;
@@ -73,6 +95,8 @@ namespace MechJebLib.FuelFlowSimulation
             {
                 if (steps-- == 0)
                     throw new Exception("FuelFlowSimulation hit max steps of " + MAXSTEPS + " steps in rcs calculations");
+
+                CancelToken.ThrowIfCancellationRequested();
 
                 vessel.UpdateRcsStats();
                 vessel.UpdateActiveRcs();
@@ -160,6 +184,8 @@ namespace MechJebLib.FuelFlowSimulation
 
             for (int steps = MAXSTEPS; steps > 0; steps--)
             {
+                CancelToken.ThrowIfCancellationRequested();
+
                 if (AllowedToStage(vessel))
                     return;
 
@@ -205,12 +231,17 @@ namespace MechJebLib.FuelFlowSimulation
                 part.ApplyResourceDrains(dt);
         }
 
-        private void UpdateRcsDrains(SimVessel vessel)
+        private void ClearRcsDrains()
         {
             foreach (SimPart part in _partsWithRCSDrains)
                 part.ClearRCSDrains();
 
             _partsWithRCSDrains.Clear();
+        }
+
+        private void UpdateRcsDrains(SimVessel vessel)
+        {
+            ClearRcsDrains();
 
             for (int i = 0; i < vessel.ActiveRcs.Count; i++)
             {
@@ -300,7 +331,7 @@ namespace MechJebLib.FuelFlowSimulation
                 part.ClearResiduals();
         }
 
-        private void UpdateResourceDrainsAndResiduals(SimVessel vessel)
+        private void ClearResourceDrainsAndResiduals()
         {
             foreach (SimPart part in _partsWithResourceDrains)
             {
@@ -309,6 +340,11 @@ namespace MechJebLib.FuelFlowSimulation
             }
 
             _partsWithResourceDrains.Clear();
+        }
+
+        private void UpdateResourceDrainsAndResiduals(SimVessel vessel)
+        {
+            ClearResourceDrainsAndResiduals();
 
             for (int i = 0; i < vessel.ActiveEngines.Count; i++)
             {
@@ -520,6 +556,11 @@ namespace MechJebLib.FuelFlowSimulation
                 SpoolUpTime = vessel.SpoolupCurrent,
                 StagedMass = stagedMass
             };
+
+            foreach (SimModuleEngines e in vessel.ActiveEngines)
+                _currentSegment.AddEngineSignature(e.Signature());
+
+            _currentSegment.SortEngineSignatures();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -539,8 +580,9 @@ namespace MechJebLib.FuelFlowSimulation
                 if (e.Part.IsSepratron)
                     continue;
 
-                // never stage an active engine
-                if (e.Part.DecoupledInStage >= vessel.CurrentStage - 1)
+                // never stage an active engine, unless it has drop tanks, in which case it is held by those tanks below and is
+                // dropped once they are empty even though it is still running (crossfeeding from the tanks which stay)
+                if (e.Part.DecoupledInStage >= vessel.CurrentStage - 1 && !e.HasDropTanks(vessel.CurrentStage - 1))
                     return false;
 
                 // never drop fuel that could be used

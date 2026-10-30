@@ -14,7 +14,7 @@ namespace MechJebLib.PSG
 {
     public class Optimizer
     {
-        public enum ObjectiveType { MAX_MASS, MAX_ENERGY, MIN_THRUST_ACCEL, MIN_TIME }
+        public enum ObjectiveType { MIN_MASS_BURNED, MAX_ENERGY, MIN_THRUST_ACCEL, MIN_TIME }
 
         public readonly Problem Problem;
         public readonly PhaseCollection Phases;
@@ -38,11 +38,13 @@ namespace MechJebLib.PSG
         public int    K                   => 3 * N + 1;
         public int    N                   { get; set; } = 7;
         public int    Maxits              { get; set; } = 4000;
-        public double SQPTrustRegionLimit { get; set; } = 1e-5;
-        public double Epsf                { get; set; } = 0; // 1e-9;
+        public double SQPTrustRegionLimit { get; set; } = 1e-6;
+        public double Epsf                { get; set; } = 1e-9;
         public double Diffstep            { get; set; } = 1e-9;
         public double Stpmax              { get; set; } = 10;
         public int    OptimizerTimeout    { get; set; } = 120_000; // milliseconds
+        public double ZeroCoastTime       { get; set; } = 1; // seconds, minimum coast of a burn-coast-burn with a nonzero first burn
+        public double ZeroCoastMu         { get; set; } = 1e-6;
 
         public Optimizer(Problem problem, PhaseCollection phases, ITerminal terminal, ObjectiveType objective)
         {
@@ -402,7 +404,7 @@ namespace MechJebLib.PSG
                         // only at collocation points
                         if (i % 3 == 0)
                             continue;
-                        _nu[ci++] = 1.0 / 100.0;
+                        _nu[ci++] = 1.0 / AscentProblem.FUDGE_FACTOR;
                     }
                 }
             }
@@ -412,7 +414,7 @@ namespace MechJebLib.PSG
                 for (int p = 0; p < Phases.Count; p++)
                 {
                     for (int i = 0; i < K; i++)
-                        _nu[ci++] = 1.0 / 100.0;
+                        _nu[ci++] = 1.0 / AscentProblem.FUDGE_FACTOR;
                 }
             }
 
@@ -440,6 +442,16 @@ namespace MechJebLib.PSG
                 }
             }
 
+            // zero coast inequality constraints
+            for (int p = 0; p < Phases.Count; p++)
+            {
+                if (!Phases.IsDuringCoast(p))
+                    continue;
+
+                _nl[ci] = 0;
+                _nu[ci++] = double.PositiveInfinity;
+            }
+
             alglib.sparsecreatecrsempty(_vars.TotalVariables, out alglib.sparsematrix j2);
             _ascentProblem.ConstraintFunction(f, j2, _xGuess, new AscentProblem.ConstraintArgs(true));
 
@@ -459,10 +471,9 @@ namespace MechJebLib.PSG
 
 #if DEBUG
             alglib.minnlcoptguardgradient(_state, Diffstep);
+            alglib.minnlcoptguardsmoothness(_state, 1);
 #endif
-
-            //alglib.minnlcoptguardsmoothness(_state, 1);
-            //alglib.trace_file("SQP,PREC.F6", "/tmp/trace.log");
+            //alglib.trace_file("SQP,SQP.PROBINGONFAILURE,PREC.F6", "/tmp/trace.log");
 
             alglib.minnlcoptimize(_state, _constraintHandle, null, null);
             alglib.minnlcresultsbuf(_state, ref x, _rep);
@@ -486,10 +497,9 @@ namespace MechJebLib.PSG
             if (ogrep.nonc1suspected)
                 throw new Exception("nonc1suspected");
 
+            alglib.sparsecreatecrsempty(_vars.TotalVariables, out alglib.sparsematrix jac);
 
-            alglib.sparsecreatecrsempty(_vars.TotalVariables, out alglib.sparsematrix j);
-
-            _ascentProblem.ConstraintFunction(f, j, x, null);
+            _ascentProblem.ConstraintFunction(f, jac, x, null);
             CalculatePrimalFeasibility(f, true);
 
             DebugPrint($"Cost: {Cost}");
@@ -516,6 +526,15 @@ namespace MechJebLib.PSG
             }
             catch (OperationCanceledException)
             {
+            }
+            catch (alglib.alglibexception) when (TimeoutToken.IsCancellationRequested)
+            {
+                // ALGLIB rewraps the OperationCanceledException thrown from our callback as a "non-ALGLIB exception"
+            }
+            catch (alglib.alglibexception e)
+            {
+                // alglibexception never passes its message to the base constructor, so Message is useless
+                throw new Exception(e.msg, e);
             }
 
             return null;

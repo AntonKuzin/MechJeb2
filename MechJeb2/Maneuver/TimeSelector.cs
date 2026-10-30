@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using JetBrainsAnnotations::JetBrains.Annotations;
 using KSP.Localization;
@@ -23,6 +23,8 @@ namespace MuMech
 
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public int _currentTimeRef;
+
+        internal string[] TimeRefNames => _timeRefNames;
 
         public TimeReference TimeReference => _allowedTimeRef[_currentTimeRef];
 

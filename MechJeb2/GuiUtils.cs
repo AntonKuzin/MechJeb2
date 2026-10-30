@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -6,6 +6,7 @@ using JetBrainsAnnotations::JetBrains.Annotations;
 using UnityEngine;
 using UnityEngine.Profiling;
 using Object = UnityEngine.Object;
+using static MechJebLib.Utils.Statics;
 
 namespace MuMech
 {
@@ -20,7 +21,12 @@ namespace MuMech
     //(multiplier * parsed value). If the parsing fails, the parsed flag is set to false and
     //the stored value is unchanged. There are implicit conversions between EditableDouble and
     //double so that if you are not doing text input you can treat an EditableDouble like a double.
-    public class EditableDoubleMult : IEditable
+    //
+    //ValConfig (the multiplied value) is the source of truth. TextConfig is persisted as well, but after
+    //loading it is regenerated from ValConfig if it doesn't parse back to the same value, so changing the
+    //multiplier (or display format) of an existing field is safe without migrating old saves. Changing the
+    //units of the stored value itself is not, and needs a new config key.
+    public class EditableDoubleMult : IEditable, IPersistenceLoad
     {
         [UsedImplicitly, Persistent]
         public double ValConfig;
@@ -37,7 +43,10 @@ namespace MuMech
 
         private readonly double _multiplier;
 
-        protected bool Parsed;
+        protected bool Parsed = true; // text generated from the value is valid until the user types something that isn't
+
+        /// <summary>False while the text does not parse (the value keeps its last good value).</summary>
+        public bool IsParsed => Parsed;
 
         [UsedImplicitly, Persistent]
         public string TextConfig;
@@ -49,9 +58,17 @@ namespace MuMech
             {
                 TextConfig = value;
                 TextConfig = Regex.Replace(TextConfig, @"[^\d+-.]", ""); //throw away junk characters
-                Parsed = double.TryParse(TextConfig, out double parsedValue);
-                if (Parsed) ValConfig = parsedValue * _multiplier;
+                Parsed = TryParseText(TextConfig, out double parsedValue);
+                if (Parsed) ValConfig = parsedValue;
             }
+        }
+
+        // parses display text into the stored (multiplied) value
+        protected virtual bool TryParseText(string text, out double val)
+        {
+            bool parsed = double.TryParse(text, out val);
+            val *= _multiplier;
+            return parsed;
         }
 
         public EditableDoubleMult() : this(0) { }
@@ -61,6 +78,14 @@ namespace MuMech
             Val = val;
             _multiplier = multiplier;
             TextConfig = (val / multiplier).ToString();
+        }
+
+        // called by ConfigNode.LoadObjectFromConfig after loading, the persisted text may be stale if the multiplier changed
+        public void PersistenceLoad()
+        {
+            // ReSharper disable once CompareOfFloatsByEqualityOperator
+            if (!TryParseText(TextConfig, out double val) || val != ValConfig)
+                Val = ValConfig;
         }
 
         public static implicit operator double(EditableDoubleMult x) => x.Val;
@@ -106,20 +131,13 @@ namespace MuMech
             {
                 TextConfig = value;
                 TextConfig = Regex.Replace(TextConfig, @"[^\d+-.ydhms ,]", ""); //throw away junk characters
-
-                Parsed = double.TryParse(TextConfig, out double parsedValue);
-                switch (Parsed)
-                {
-                    case true:
-                        ValConfig = parsedValue;
-                        break;
-                    case false:
-                        Parsed = GuiUtils.TryParseDHMS(TextConfig, out parsedValue);
-                        if (Parsed) ValConfig = parsedValue;
-                        break;
-                }
+                Parsed = TryParseText(TextConfig, out double parsedValue);
+                if (Parsed) ValConfig = parsedValue;
             }
         }
+
+        protected override bool TryParseText(string text, out double val) =>
+            double.TryParse(text, out val) || GuiUtils.TryParseDHMS(text, out val);
 
         public static implicit operator EditableTime(double x) => new EditableTime(x);
 
@@ -142,7 +160,7 @@ namespace MuMech
 
         public EditableAngle(double angle)
         {
-            angle = MuUtils.ClampDegrees180(angle);
+            angle = Clamp180(angle);
 
             Negative = angle < 0;
             angle = Math.Abs(angle);
@@ -329,7 +347,7 @@ namespace MuMech
             {
                 if (_orangeLabel != null) return _orangeLabel;
 
-                _orangeLabel = new GUIStyle(GUI.skin.label) { normal = { textColor = Color.green }, hover = { textColor = Color.green } };
+                _orangeLabel = new GUIStyle(GUI.skin.label) { normal = { textColor = XKCDColors.Orange }, hover = { textColor = XKCDColors.Orange } };
 
                 return _orangeLabel;
             }
@@ -586,6 +604,19 @@ namespace MuMech
             Profiler.EndSample();
         }
 
+        // GUIContent overload for callers that need a tooltip on the toggle (cache the content to avoid per-frame allocations).
+        public static void ToggledTextBox(ref bool toggle, GUIContent toggleContent, IEditable ed, string? rightLabel = null,
+            GUIStyle? toggleStyle = null, float width = 100)
+        {
+            Profiler.BeginSample("ToggledTextField");
+            GUILayout.BeginHorizontal();
+            toggle = toggleStyle != null ? GUILayout.Toggle(toggle, toggleContent, toggleStyle) : GUILayout.Toggle(toggle, toggleContent);
+            SimpleTextField(ed, width);
+            if (!string.IsNullOrEmpty(rightLabel)) GUILayout.Label(rightLabel);
+            GUILayout.EndHorizontal();
+            Profiler.EndSample();
+        }
+
         public static bool ButtonTextBox(string buttonText, IEditable ed, string? rightLabel = null, GUIStyle? buttonStyle = null, float width = 100)
         {
             Profiler.BeginSample("ButtonTextBox");
@@ -743,7 +774,8 @@ namespace MuMech
             //try to check if the mouse is over any active DisplayModule
             foreach (DisplayModule m in core.GetComputerModules<DisplayModule>())
             {
-                if (m.Enabled && m.ShowInCurrentScene && !m.IsOverlay && m.WindowPos.Contains(mousePos))
+                // windows drawn by a MechJebUiHost report their own hover through the host
+                if (m.Enabled && m.ShowInCurrentScene && !m.IsOverlay && !MechJebUiHost.Owns(m) && m.WindowPos.Contains(mousePos))
                     return true;
             }
 
@@ -769,7 +801,7 @@ namespace MuMech
                     double error = Math.Abs(curRadius - alt);
                     if (error < (body.pqsController.radiusMax - body.pqsController.radiusMin) / 100)
                     {
-                        return new Coordinates(body.GetLatitude(surfacePoint), MuUtils.ClampDegrees180(body.GetLongitude(surfacePoint)));
+                        return new Coordinates(body.GetLatitude(surfacePoint), Clamp180(body.GetLongitude(surfacePoint)));
                     }
 
                     lastRadius = curRadius;
@@ -984,7 +1016,7 @@ namespace MuMech
         [UsedImplicitly]
         public static string ToStringDecimal(double latitude, double longitude, bool newline = false, int precision = 3)
         {
-            double clampedLongitude = MuUtils.ClampDegrees180(longitude);
+            double clampedLongitude = Clamp180(longitude);
             double latitudeAbs = Math.Abs(latitude);
             double longitudeAbs = Math.Abs(clampedLongitude);
             return latitudeAbs.ToString("F" + precision) + "° " + (latitude > 0 ? "N" : "S") + (newline ? "\n" : ", ")
@@ -995,7 +1027,7 @@ namespace MuMech
 
         public static string ToStringDMS(double latitude, double longitude, bool newline = false)
         {
-            double clampedLongitude = MuUtils.ClampDegrees180(longitude);
+            double clampedLongitude = Clamp180(longitude);
             return AngleToDMS(latitude) + (latitude > 0 ? " N" : " S") + (newline ? "\n" : ", ")
                 + AngleToDMS(clampedLongitude) + (clampedLongitude > 0 ? " E" : " W");
         }

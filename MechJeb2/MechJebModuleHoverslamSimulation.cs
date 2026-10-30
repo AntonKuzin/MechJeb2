@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 
 extern alias JetBrainsAnnotations;
 using System;
@@ -72,21 +72,29 @@ namespace MuMech
         public double TerrainAltitude;
 
         [ToggleInfoItem("#MechJeb_HoverslamMapLandingPrediction", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamMapLandingPrediction_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-         //Map landing prediction
+        //Map landing prediction
         public bool MapLandingPrediction = true;
 
         [EditableInfoItem("#MechJeb_HoverslamSimRecalcInterval", InfoItem.Category.Hoverslam, width = 50, rightLabel = "s", expandWidth = true, tooltip = "#MechJeb_HoverslamSimRecalcInterval_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-         //Simulation recalc interval
+        //Simulation recalc interval
         public readonly EditableDouble SimRecalcInterval = new EditableDouble(1.0);
 
         [EditableInfoItem("#MechJeb_HoverslamVerticalAuthority", InfoItem.Category.Hoverslam, width = 50, rightLabel = "%", expandWidth = true, tooltip = "#MechJeb_HoverslamVerticalAuthority_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-         //Vertical phase authority
+        //Vertical phase authority
         public readonly EditableDoubleMult VerticalAuthority = new EditableDoubleMult(0.5, 0.01);
 
         [EditableInfoItem("#MechJeb_HoverslamVerticalAltitude", InfoItem.Category.Hoverslam, width = 50, rightLabel = "m", expandWidth = true, tooltip = "#MechJeb_HoverslamVerticalAltitude_tooltip"), Persistent(pass = (int)(Pass.GLOBAL | Pass.TYPE))]
-         //Vertical phase altitude
+        //Vertical phase altitude
         public readonly EditableDouble VerticalAltitude = new EditableDouble(100);
 
+        // TODO: push throttle limiters into simulation:  minthrottle, maxthrottle, maxaccel
+        // TODO: disable maxQ throttle limiter -- you want more throttle to reduce dynamic pressure on landing (sse issue #706)
+        //       (might be a fix in the thrustcontroller to not limit due to maxQ if we're burning to slow down, not speed up)
+        // TODO: look at the way diff throttle leaks into vacstats through thrustPercentage in SimVesselUpdater?  that seems kind of awful
+        //       (diff throttle should really just be handled by the user by increasing margins)
+        // TODO: should consider turning off the autostage limit for this autopilot, or having private values
+        //       (requires a big rethink of how staging and throttle settings interact with autopilots)
+        // TODO: hotstaging lead time integration?  (does hotstaging make any sense for landing?)
         // TODO: VerticalAuthority needs better integration with the prediction.
         // TODO: what does VerticalAuthority mean?  for stock it is just halfway between hover and max.  for a unthrottleable
         //       engine it should just be the same to give 50% duty cycle.  for a throttleable engine, it should probably be
@@ -198,7 +206,7 @@ namespace MuMech
         {
             double r = GetGroundRadius();
 
-            if (VesselState.MainBody is null || !Vessel.VesselOffGround() || Orbit.PeA > 0 || Orbit.ApR < r + VerticalAltitude)
+            if (!Vessel.VesselOffGround() || Orbit.PeA > 0 || Orbit.ApR < r + VerticalAltitude)
             {
                 Reset();
                 return;
@@ -282,7 +290,7 @@ namespace MuMech
                         stagingDelay += nextDelay * (deltaStage - 1);
                     }
 
-                    _manager.AddCoast(fuelStats.StartMass * 1000, fuelStats.StartMass * 1000,  stagingDelay, fuelStats.KSPStage, mjPhase);
+                    _manager.AddCoast(fuelStats.StartMass * 1000, fuelStats.StartMass * 1000, stagingDelay, fuelStats.KSPStage, mjPhase);
                 }
 
                 _manager.AddStage(fuelStats.StartMass * 1000, fuelStats.EndMass * 1000, fuelStats.Thrust * 1000, fuelStats.Isp,

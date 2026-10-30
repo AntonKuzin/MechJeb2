@@ -11,25 +11,25 @@ namespace MuMech
 {
     public class MechJebModuleAscentMenu : DisplayModule
     {
-        private readonly string[] _ascentPathList = { Localizer.Format("#MechJeb_Ascent_ascentPathList1"), Localizer.Format("#MechJeb_Ascent_ascentPathList3") }; // "Classic Ascent Profile", "PSG (RSS/RO)"
+        internal readonly string[] _ascentPathList = { Localizer.Format("#MechJeb_Ascent_ascentPathList1"), Localizer.Format("#MechJeb_Ascent_ascentPathList3") }; // "Classic Ascent Profile", "PSG (RSS/RO)"
 
         public MechJebModuleAscentMenu(MechJebCore core) : base(core) { }
 
         #region Delegators
 
-        private bool _launchingToPlane
+        internal bool _launchingToPlane
         {
             get => _ascentSettings.LaunchingToPlane;
             set => _ascentSettings.LaunchingToPlane = value;
         }
 
-        private bool _launchingToMatchLan
+        internal bool _launchingToMatchLan
         {
             get => _ascentSettings.LaunchingToMatchLan;
             set => _ascentSettings.LaunchingToMatchLan = value;
         }
 
-        private bool _launchingToLan
+        internal bool _launchingToLan
         {
             get => _ascentSettings.LaunchingToLan;
             set => _ascentSettings.LaunchingToLan = value;
@@ -37,18 +37,22 @@ namespace MuMech
 
         #endregion
 
-        private bool _launchingWithAnyPlaneControl => _launchingToPlane || _launchingToMatchLan || _launchingToLan;
+        internal bool _launchingWithAnyPlaneControl => _launchingToPlane || _launchingToMatchLan || _launchingToLan;
 
-        private MechJebModuleAscentBaseAutopilot   _autopilot       => Core.Ascent;
-        private MechJebModuleAscentSettings        _ascentSettings  => Core.AscentSettings;
-        private MechJebModuleAscentClassicPathMenu _classicPathMenu => Core.GetComputerModule<MechJebModuleAscentClassicPathMenu>();
-        private MechJebModuleAscentPSGSettingsMenu _psgSettingsMenu => Core.GetComputerModule<MechJebModuleAscentPSGSettingsMenu>();
-        private MechJebModuleAscentSettingsMenu    _settingsMenu    => Core.GetComputerModule<MechJebModuleAscentSettingsMenu>();
+        internal MechJebModuleAscentBaseAutopilot   _autopilot       => Core.Ascent;
+        internal MechJebModuleAscentSettings        _ascentSettings  => Core.AscentSettings;
+        internal MechJebModuleAscentClassicPathMenu _classicPathMenu => Core.GetComputerModule<MechJebModuleAscentClassicPathMenu>();
+        internal MechJebModuleAscentPSGSettingsMenu _psgSettingsMenu => Core.GetComputerModule<MechJebModuleAscentPSGSettingsMenu>();
+        internal MechJebModuleAscentSettingsMenu    _settingsMenu    => Core.GetComputerModule<MechJebModuleAscentSettingsMenu>();
 
-        [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
+        internal EditableDouble InclinationSetting => _ascentSettings.AscentType == AscentType.PSG ? Core.PSGSimulation.Inc : _ascentSettings.DesiredInclination;
+
+        [UsedImplicitly]
+        [Persistent(pass = (int)Pass.GLOBAL)]
         public bool _lastPSGSettingsEnabled;
 
-        [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
+        [UsedImplicitly]
+        [Persistent(pass = (int)Pass.GLOBAL)]
         public bool _lastSettingsMenuEnabled;
 
         protected override void OnModuleEnabled()
@@ -110,51 +114,64 @@ namespace MuMech
             {
                 if (_ascentSettings.OptimizeStageFlag)
                 {
-                    GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel1, _ascentSettings.DesiredOrbitAltitude,
-                        "km"); //Target Periapsis
-                    GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel2, _ascentSettings.DesiredApoapsis, "km"); //Target Apoapsis:
-                    GuiUtils.ToggledTextBox(ref _ascentSettings.AttachAltFlag, CachedLocalizer.Instance.MechJebAscentAttachAlt,
-                        _ascentSettings.DesiredAttachAlt, "km");
-                    GuiUtils.ToggledTextBox(ref _ascentSettings.DesiredArgPFlag, "Arg Periapsis:", _ascentSettings.DesiredArgP, "°");
+                    GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel1, Core.PSGSimulation.PeriapsisAltitude, "km"); //Target Periapsis
+                    GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel2, Core.PSGSimulation.ApoapsisAltitude, "km"); //Target Apoapsis:
+                    GuiUtils.ToggledTextBox(ref Core.PSGSimulation.BurnoutAltitudeFlag, CachedLocalizer.Instance.MechJebAscentAttachAlt,
+                        Core.PSGSimulation.BurnoutAltitude, "km");
+                    GuiUtils.ToggledTextBox(ref Core.PSGSimulation.ArgPFlag, "Arg Periapsis:", Core.PSGSimulation.ArgP, "°");
+
+                    if (Core.PSGSimulation.ApoapsisAltitude + MainBody.Radius >= 0 && Core.PSGSimulation.ApoapsisAltitude < Core.PSGSimulation.PeriapsisAltitude)
+                        GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel3, GuiUtils.YellowLabel); //Ap < Pe: circularizing orbit
+                    else if (Core.PSGSimulation.BurnoutAltitudeFlag && Core.PSGSimulation.BurnoutAltitude > Core.PSGSimulation.ApoapsisAltitude)
+                        GUILayout.Label(CachedLocalizer.Instance.MechJebAscentWarnAttachAltHigh, GuiUtils.OrangeLabel); //Attach > Ap: apoapsis insertion
+                    if (Core.PSGSimulation.ApoapsisAltitude + MainBody.Radius < 0)
+                        GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel4, GuiUtils.OrangeLabel); //Hyperbolic target orbit (neg Ap)
+                    if (Core.PSGSimulation.BurnoutAltitudeFlag && Core.PSGSimulation.BurnoutAltitude < Core.PSGSimulation.PeriapsisAltitude)
+                        GUILayout.Label(CachedLocalizer.Instance.MechJebAscentWarnAttachAltLow, GuiUtils.OrangeLabel); //Attach < Pe: periapsis insertion
                 }
                 else
                 {
                     if (!_launchingWithAnyPlaneControl)
-                        GuiUtils.SimpleTextBox("Flight Path Angle", _ascentSettings.DesiredFPA, "°");
+                        GuiUtils.SimpleTextBox("Flight Path Angle", Core.PSGSimulation.FPA, "°");
                     GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentAttachAlt,
-                        _ascentSettings.DesiredAttachAltFixed, "km");
+                        Core.PSGSimulation.BurnoutAltitude, "km");
                 }
-
-                if (_ascentSettings.DesiredApoapsis + MainBody.Radius >= 0 && _ascentSettings.DesiredApoapsis < _ascentSettings.DesiredOrbitAltitude)
-                    GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel3, GuiUtils.YellowLabel); //Ap < Pe: circularizing orbit
-                else if (_ascentSettings.AttachAltFlag && _ascentSettings.DesiredAttachAlt > _ascentSettings.DesiredApoapsis)
-                    GUILayout.Label(CachedLocalizer.Instance.MechJebAscentWarnAttachAltHigh,
-                        GuiUtils.OrangeLabel); //Attach > Ap: apoapsis insertion
-                if (_ascentSettings.DesiredApoapsis + MainBody.Radius < 0)
-                    GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel4, GuiUtils.OrangeLabel); //Hyperbolic target orbit (neg Ap)
-                if (_ascentSettings.AttachAltFlag && _ascentSettings.DesiredAttachAlt < _ascentSettings.DesiredOrbitAltitude)
-                    GUILayout.Label(CachedLocalizer.Instance.MechJebAscentWarnAttachAltLow,
-                        GuiUtils.OrangeLabel); //Attach < Pe: periapsis insertion
             }
             else
             {
                 GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel5, _ascentSettings.DesiredOrbitAltitude, "km"); //Orbit altitude
             }
 
-            GUILayout.BeginHorizontal();
-            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel6, _ascentSettings.DesiredInclination, "º", 75, GuiUtils.Skin.label,
-                false); //Orbit inc.
-            if (GUILayout.Button(new GUIContent(CachedLocalizer.Instance.MechJebAscentButton13, "Sets inclination to launch site latitude (for due-east launch). Lower inclinations require a costly plane change."), GuiUtils.ExpandWidth(false))) //Current
-                _ascentSettings.DesiredInclination.Val = Math.Round(VesselState.Latitude, 3);
-            GUILayout.EndHorizontal();
-
-            double inclination = Math.Abs(_ascentSettings.DesiredInclination);
-            double delta = Math.Abs(VesselState.Latitude) - (inclination < 90.0 ? inclination : 180.0 - inclination);
-            if (2.001 < delta)
-                GUILayout.Label(Localizer.Format("#MechJeb_Ascent_label7", delta), GuiUtils.RedLabel); //inc {0:F1}º below current latitude
+            ShowInclinationGUIElement(InclinationSetting);
 
             GUILayout.EndVertical();
             Profiler.EndSample();
+        }
+
+        internal const string InclinationCurrentTooltip =
+            "Sets inclination to launch site latitude (for due-east launch). Lower inclinations require a costly plane change.";
+
+        // shared with the new UI
+        internal void SetInclinationToLatitude(EditableDouble inclinationSetting) => inclinationSetting.Val = Math.Round(VesselState.Latitude, 3);
+
+        internal double InclinationBelowLatitude(EditableDouble inclinationSetting)
+        {
+            double inclination = Math.Abs(inclinationSetting);
+            return Math.Abs(VesselState.Latitude) - (inclination < 90.0 ? inclination : 180.0 - inclination);
+        }
+
+        private void ShowInclinationGUIElement(EditableDouble inclinationSetting)
+        {
+            GUILayout.BeginHorizontal();
+            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel6, inclinationSetting, "º", 75, GuiUtils.Skin.label,
+                false); //Orbit inc.
+            if (GUILayout.Button(new GUIContent(CachedLocalizer.Instance.MechJebAscentButton13, InclinationCurrentTooltip), GuiUtils.ExpandWidth(false))) //Current
+                SetInclinationToLatitude(inclinationSetting);
+            GUILayout.EndHorizontal();
+
+            double delta = InclinationBelowLatitude(inclinationSetting);
+            if (2.001 < delta)
+                GUILayout.Label(Localizer.Format("#MechJeb_Ascent_label7", delta), GuiUtils.RedLabel); //inc {0:F1}º below current latitude
         }
 
         private void ShowStatusGUIElements()
@@ -199,7 +216,7 @@ namespace MuMech
                 GUILayout.Label(n, GuiUtils.LayoutWidth(90));
                 GUILayout.Label(znorm);
                 GUILayout.EndHorizontal();
-                if (Core.Glueball.LastFailureMessage != null)
+                if (Core.PSGSimulation.LastFailureMessage != null)
                 {
                     GUILayout.Label(label30, GuiUtils.RedLabel); //LAST FAILURE:
                 }
@@ -210,6 +227,59 @@ namespace MuMech
 
             Profiler.EndSample();
         }
+
+        internal bool AutoWarpTargetExists => Core.Target.NormalTargetExists && Core.Target.TargetOrbit?.referenceBody == MainBody;
+
+        // what ShowAutoWarpGUIElements does before drawing when nothing is being launched and there is no usable target
+        internal void ResetLaunchWithoutTarget()
+        {
+            if (!_launchingWithAnyPlaneControl && !AutoWarpTargetExists)
+                _launchingToPlane = _launchingToMatchLan = false;
+        }
+
+        internal void LaunchToPlaneOfTarget()
+        {
+            _launchingToPlane = true;
+            (double timeToPlane, double inclination) = Astro.MinimumTimeToPlane(
+                MainBody.rotationPeriod,
+                VesselState.Latitude,
+                VesselState.CelestialLongitude,
+                Core.Target.TargetOrbit.LAN - _ascentSettings.LaunchLANDifference,
+                Core.Target.TargetOrbit.inclination
+            );
+            _autopilot.StartCountdown(VesselState.Time + timeToPlane);
+            InclinationSetting.Val = inclination;
+        }
+
+        internal void LaunchToTargetLan()
+        {
+            _launchingToMatchLan = true;
+            _autopilot.StartCountdown(VesselState.Time +
+                Astro.TimeToPlane(
+                    MainBody.rotationPeriod,
+                    VesselState.Latitude,
+                    VesselState.CelestialLongitude,
+                    Core.Target.TargetOrbit.LAN - _ascentSettings.LaunchLANDifference,
+                    InclinationSetting
+                )
+            );
+        }
+
+        internal void LaunchToLan()
+        {
+            _launchingToLan = true;
+            _autopilot.StartCountdown(VesselState.Time +
+                Astro.TimeToPlane(
+                    MainBody.rotationPeriod,
+                    VesselState.Latitude,
+                    VesselState.CelestialLongitude,
+                    Core.PSGSimulation.LAN,
+                    InclinationSetting
+                )
+            );
+        }
+
+        internal void AbortTimedLaunch() => _launchingToPlane = _launchingToMatchLan = _launchingToLan = _autopilot.TimedLaunch = false;
 
         private void ShowAutoWarpGUIElements()
         {
@@ -222,7 +292,7 @@ namespace MuMech
             if (Core.Node.Autowarp)
                 GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel33, _ascentSettings.WarpCountDown, "s", 35); //Launch countdown:
 
-            bool targetExists = Core.Target.NormalTargetExists && Core.Target.TargetOrbit?.referenceBody == VesselState.MainBody;
+            bool targetExists = AutoWarpTargetExists;
             if (!_launchingWithAnyPlaneControl && !targetExists)
             {
                 _launchingToPlane = _launchingToMatchLan = false;
@@ -238,54 +308,21 @@ namespace MuMech
                 //Launch into plane of target
                 if (targetExists && GuiUtils.ButtonTextBox(CachedLocalizer.Instance.MechJebAscentButton15, _ascentSettings.LaunchLANDifference, "º",
                         width: LAN_WIDTH)) //Launch into plane of target
-                {
-                    _launchingToPlane = true;
-                    (double timeToPlane, double inclination) = Astro.MinimumTimeToPlane(
-                        MainBody.rotationPeriod,
-                        VesselState.Latitude,
-                        VesselState.CelestialLongitude,
-                        Core.Target.TargetOrbit.LAN - _ascentSettings.LaunchLANDifference,
-                        Core.Target.TargetOrbit.inclination
-                    );
-                    _autopilot.StartCountdown(VesselState.Time + timeToPlane);
-                    _ascentSettings.DesiredInclination.Val = inclination;
-                }
+                    LaunchToPlaneOfTarget();
 
                 //Launch to target LAN
                 if (targetExists && _ascentSettings.AscentType == AscentType.PSG
                     && GuiUtils.ButtonTextBox(CachedLocalizer.Instance.MechJebAscentLaunchToTargetLan,
                         _ascentSettings.LaunchLANDifference,
                         "º", width: LAN_WIDTH)) //Launch to target LAN
-                {
-                    _launchingToMatchLan = true;
-                    _autopilot.StartCountdown(VesselState.Time +
-                        Astro.TimeToPlane(
-                            MainBody.rotationPeriod,
-                            VesselState.Latitude,
-                            VesselState.CelestialLongitude,
-                            Core.Target.TargetOrbit.LAN - _ascentSettings.LaunchLANDifference,
-                            _ascentSettings.DesiredInclination
-                        )
-                    );
-                }
+                    LaunchToTargetLan();
 
                 //Launch to LAN
                 if (_ascentSettings.AscentType == AscentType.PSG)
                 {
-                    if (GuiUtils.ButtonTextBox(CachedLocalizer.Instance.MechJebAscentLaunchToLan, _ascentSettings.DesiredLan, "º",
+                    if (GuiUtils.ButtonTextBox(CachedLocalizer.Instance.MechJebAscentLaunchToLan, Core.PSGSimulation.LAN, "º",
                             width: LAN_WIDTH)) //Launch to LAN
-                    {
-                        _launchingToLan = true;
-                        _autopilot.StartCountdown(VesselState.Time +
-                            Astro.TimeToPlane(
-                                MainBody.rotationPeriod,
-                                VesselState.Latitude,
-                                VesselState.CelestialLongitude,
-                                _ascentSettings.DesiredLan,
-                                _ascentSettings.DesiredInclination
-                            )
-                        );
-                    }
+                        LaunchToLan();
 
                     _ascentSettings.RelativeLAN = GUILayout.Toggle(_ascentSettings.RelativeLAN, "Use LAN relative to launch site");
                 }
@@ -295,7 +332,7 @@ namespace MuMech
             {
                 GUILayout.Label(launchTimer);
                 if (GUILayout.Button(CachedLocalizer.Instance.MechJebAscentButton17)) //Abort
-                    _launchingToPlane = _launchingToMatchLan = _launchingToLan = _autopilot.TimedLaunch = false;
+                    AbortTimedLaunch();
             }
 
             _ascentSettings.OverrideWarpToPlane = GUILayout.Toggle(_ascentSettings.OverrideWarpToPlane, "Override Warp to Plane");
@@ -305,13 +342,15 @@ namespace MuMech
         }
 
         private DateTime _lastRefresh = DateTime.MinValue;
-        private string vgo, heading, tgo, pitch, label26, label27, label28, n, label29, znorm, label30, launchTimer, autopilotStatus;
+        internal string vgo, heading, tgo, pitch, label26, label27, label28, n, label29, znorm, label30, launchTimer, autopilotStatus;
+        internal GUIStyle autopilotStatusStyle;
         private TimeSpan _refreshInterval = TimeSpan.FromSeconds(0.1);
 
-        [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
+        [UsedImplicitly]
+        [Persistent(pass = (int)Pass.GLOBAL)]
         public EditableInt _refreshRate = 10;
 
-        private void UpdateStrings()
+        internal void UpdateStrings()
         {
             DateTime now = DateTime.Now;
             if (now <= _lastRefresh + _refreshInterval) return;
@@ -323,13 +362,13 @@ namespace MuMech
             tgo = $"tgo: {Core.Guidance.Tgo:F3}";
             pitch = $"pitch: {Core.Guidance.Pitch:F1}";
             label26 = $"{CachedLocalizer.Instance.MechJebAscentLabel26}{Core.Guidance.Status}";
-            label27 = $"{CachedLocalizer.Instance.MechJebAscentLabel27}{Core.Glueball.SuccessfulConverges}";
-            label28 = $"{CachedLocalizer.Instance.MechJebAscentLabel28}{Core.Glueball.LastLmStatus}";
-            n = $"n: {Core.Glueball.LastLmIterations}({Core.Glueball.MaxLmIterations})";
-            label29 = $"{CachedLocalizer.Instance.MechJebAscentLabel29} {GuiUtils.TimeToDHMS(Core.Glueball.Staleness)}";
-            znorm = $"infeasibility: {Core.Glueball.LastInfeasibility:G5}";
-            if (Core.Glueball.LastFailureMessage != null)
-                label30 = $"{CachedLocalizer.Instance.MechJebAscentLabel30}{Core.Glueball.LastFailureMessage}";
+            label27 = $"{CachedLocalizer.Instance.MechJebAscentLabel27}{Core.PSGSimulation.SuccessfulConverges}";
+            label28 = $"{CachedLocalizer.Instance.MechJebAscentLabel28}{Core.PSGSimulation.LastLmStatus}";
+            n = $"n: {Core.PSGSimulation.LastLmIterations}({Core.PSGSimulation.MaxLmIterations})";
+            label29 = $"{CachedLocalizer.Instance.MechJebAscentLabel29} {GuiUtils.TimeToDHMS(Core.PSGSimulation.Staleness)}";
+            znorm = $"infeasibility: {Core.PSGSimulation.LastInfeasibility:G5}";
+            if (Core.PSGSimulation.LastFailureMessage != null)
+                label30 = $"{CachedLocalizer.Instance.MechJebAscentLabel30}{Core.PSGSimulation.LastFailureMessage}";
 
             if (_launchingToPlane) launchTimer = CachedLocalizer.Instance.MechJebAscentMsg2; //Launching to target plane
             else if (_launchingToMatchLan) launchTimer = CachedLocalizer.Instance.MechJebAscentLaunchingToTargetLAN; //Launching to target LAN
@@ -339,7 +378,30 @@ namespace MuMech
                 launchTimer += $": T-{GuiUtils.TimeToDHMS(_autopilot.TMinus, 1)}";
 
             autopilotStatus = CachedLocalizer.Instance.MechJebAscentLabel35 + _autopilot.Status;
+            autopilotStatusStyle = _autopilot.StatusSeverity switch
+            {
+                MechJebModuleAscentBaseAutopilot.StatusLevel.ERROR   => GuiUtils.RedLabel,
+                MechJebModuleAscentBaseAutopilot.StatusLevel.WARNING => GuiUtils.YellowLabel,
+                _                                                    => GUI.skin.label
+            };
+            UpdatePhaseLines();
             Profiler.EndSample();
+        }
+
+        // The PSG status lines (one per burn/coast phase, then the terminal conditions), for the new UI whose rows are fixed
+        internal const int MAX_PHASE_LINES = 12;
+        internal readonly string[] PhaseLines = new string[MAX_PHASE_LINES];
+        internal int PhaseLineCount;
+
+        private void UpdatePhaseLines()
+        {
+            PhaseLineCount = 0;
+            if (_ascentSettings.AscentType != AscentType.PSG || Core.Guidance.Solution == null) return;
+
+            Solution solution = Core.Guidance.Solution;
+            for (int psgPhase = solution.Segments - 1; psgPhase >= 0 && PhaseLineCount < MAX_PHASE_LINES - 1; psgPhase--)
+                PhaseLines[PhaseLineCount++] = PhaseString(solution, VesselState.Time, psgPhase);
+            PhaseLines[PhaseLineCount++] = solution.TerminalString();
         }
 
         private void RefreshRateGUI()
@@ -347,6 +409,11 @@ namespace MuMech
             int oldRate = _refreshRate;
             if (GuiUtils.ShowAdvancedWindowSettings)
                 GuiUtils.SimpleTextBox("Update Interval", _refreshRate, "Hz");
+            RefreshRateChanged(oldRate);
+        }
+
+        internal void RefreshRateChanged(int oldRate)
+        {
             if (oldRate != _refreshRate)
             {
                 _refreshRate = Math.Max(_refreshRate, 1);
@@ -363,8 +430,6 @@ namespace MuMech
             //PerformanceTestGUIElements();
             VisibleSectionsGUIElements();
             ShowTargetingGUIElements();
-
-            _ascentSettings.LimitQaEnabled = _ascentSettings.AscentType == AscentType.PSG; // this is mandatory for PSG
 
             GUILayout.BeginVertical(GUI.skin.box);
             GUILayout.BeginHorizontal();
@@ -383,7 +448,7 @@ namespace MuMech
             ShowStatusGUIElements();
             ShowAutoWarpGUIElements();
 
-            if (_autopilot.Enabled) GUILayout.Label(autopilotStatus); //Autopilot status:
+            if (_autopilot.Enabled) GUILayout.Label(autopilotStatus, autopilotStatusStyle); //Autopilot status:
             if (Core.DeactivateControl)
                 GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel36, GuiUtils.RedLabel); //CONTROL DISABLED (AVIONICS)
 

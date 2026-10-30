@@ -2,11 +2,6 @@
  * Copyright Lamont Granquist, Sebastien Gaggini and the MechJeb contributors
  * SPDX-License-Identifier: LicenseRef-PD-hp OR Unlicense OR CC0-1.0 OR 0BSD OR MIT-0 OR MIT OR LGPL-2.1+
  */
-/*
- * Copyright Lamont Granquist (lamont@scriptkiddie.org)
- * Dual licensed under the MIT (MIT-LICENSE) license
- * and GPLv2 (GPLv2-LICENSE) license or any later version.
- */
 
 using Xunit;
 using static MechJebLib.Utils.Statics;
@@ -45,6 +40,37 @@ namespace MechJebLibTest
             Clamp2Pi(TAU).ShouldBeZero(double.Epsilon);
             Clamp2Pi(3 * PI).ShouldEqual(PI, double.Epsilon);
             Clamp2Pi(-double.Epsilon).ShouldEqual(0);
+        }
+
+        [Fact]
+        public void Clamp180Test()
+        {
+            Clamp180(-360).ShouldBeZero(double.Epsilon);
+            Clamp180(-270).ShouldEqual(90, double.Epsilon);
+            Clamp180(-180).ShouldEqual(180, double.Epsilon);
+            Clamp180(-90).ShouldEqual(-90, double.Epsilon);
+            Clamp180(0).ShouldBeZero(double.Epsilon);
+            Clamp180(90).ShouldEqual(90, double.Epsilon);
+            Clamp180(180).ShouldEqual(180, double.Epsilon);
+            Clamp180(270).ShouldEqual(-90, double.Epsilon);
+            Clamp180(360).ShouldBeZero(double.Epsilon);
+            Clamp180(540).ShouldEqual(180, double.Epsilon);
+        }
+
+        [Fact]
+        public void Clamp360Test()
+        {
+            Clamp360(-360).ShouldBeZero(double.Epsilon);
+            Clamp360(-270).ShouldEqual(90, double.Epsilon);
+            Clamp360(-180).ShouldEqual(180, double.Epsilon);
+            Clamp360(-90).ShouldEqual(270, double.Epsilon);
+            Clamp360(0).ShouldBeZero(double.Epsilon);
+            Clamp360(90).ShouldEqual(90, double.Epsilon);
+            Clamp360(180).ShouldEqual(180, double.Epsilon);
+            Clamp360(270).ShouldEqual(270, double.Epsilon);
+            Clamp360(360).ShouldBeZero(double.Epsilon);
+            Clamp360(540).ShouldEqual(180, double.Epsilon);
+            Clamp360(-double.Epsilon).ShouldEqual(0);
         }
 
         [Fact]

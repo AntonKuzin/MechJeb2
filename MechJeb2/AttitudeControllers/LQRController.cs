@@ -13,15 +13,15 @@ namespace MuMech.AttitudeControllers
         private readonly LQRLoop1[] _lqr = { new LQRLoop1(), new LQRLoop1(), new LQRLoop1() };
         private readonly DirectionTracker _directionTracker = new DirectionTracker();
 
-        private Vector3d _actuation = Vector3d.zero;
-        private Vector3d _current = Vector3d.zero;
-        private Vector3d _desired = Vector3d.zero;
-        private Vector3d _error = Vector3d.zero;
+        internal Vector3d _actuation = Vector3d.zero;
+        internal Vector3d _current = Vector3d.zero;
+        internal Vector3d _desired = Vector3d.zero;
+        internal Vector3d _error = Vector3d.zero;
         private double _distance;
-        private Vector3d _velocity = Vector3d.zero;
-        private Vector3d _mass = Vector3d.zero;
-        private Vector3d _controlTorque = Vector3d.zero;
-        private Vector3d _targetTorque = Vector3d.zero;
+        internal Vector3d _velocity = Vector3d.zero;
+        internal Vector3d _mass = Vector3d.zero;
+        internal Vector3d _controlTorque = Vector3d.zero;
+        internal Vector3d _targetTorque = Vector3d.zero;
 
         [UsedImplicitly, Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDouble SmoothTorque = new EditableDouble(0.10);
@@ -30,7 +30,7 @@ namespace MuMech.AttitudeControllers
         {
         }
 
-        private Vessel _vessel => Ac.Vessel;
+        internal Vessel _vessel => Ac.Vessel;
 
         private void UpdateLQR()
         {
@@ -43,11 +43,11 @@ namespace MuMech.AttitudeControllers
             _velocity = _vessel.angularVelocityD;
 
             // low-pass filter the control torque
-            _controlTorque = _controlTorque == Vector3d.zero ? Ac.torque : _controlTorque + SmoothTorque * (Ac.torque - _controlTorque);
+            _controlTorque = _controlTorque == Vector3d.zero ? Ac.Torque : _controlTorque + SmoothTorque * (Ac.Torque - _controlTorque);
 
             // if torque is really zero, set it zero
             for (int i = 0; i < 3; i++)
-                if (Ac.torque[i] == 0)
+                if (Ac.Torque[i] == 0)
                     _controlTorque[i] = 0;
 
             for (int i = 0; i < 3; i++)

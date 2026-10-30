@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using KSP.Localization;
 using UnityEngine;
 
@@ -17,15 +17,7 @@ namespace MuMech
         {
             AutoDeploy = GUILayout.Toggle(AutoDeploy, Localizer.Format("#MechJeb_SolarPanelDeployButton")); //"Auto-deploy solar panels"
 
-            if (!GUILayout.Button(ButtonText)) return;
-
-            if (ExtendingOrRetracting())
-                return;
-
-            if (!Extended)
-                ExtendAll();
-            else
-                RetractAll();
+            if (GUILayout.Button(ButtonText)) ToggleDeploy();
         }
 
         protected override bool IsModules(ModuleDeployablePart p) => p is ModuleDeployableSolarPanel;

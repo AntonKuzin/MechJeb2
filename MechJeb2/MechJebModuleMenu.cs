@@ -17,7 +17,6 @@ namespace MuMech
         {
             Priority = -1000;
             Enabled = true;
-            Hidden = true;
             ShowInFlight = true;
             ShowInEditor = true;
 
@@ -27,6 +26,8 @@ namespace MuMech
             if (featureButtons == null)
                 featureButtons = new Dictionary<Action, Button>();
         }
+
+        public override bool ShowInMenu => false;
 
         public enum WindowStat
         {
@@ -123,7 +124,7 @@ namespace MuMech
 
         public bool firstDraw = true;
 
-        private bool movingButton;
+        internal bool movingButton;
 
         [ToggleInfoItem("#MechJeb_HideMenuButton", InfoItem.Category.Misc), Persistent(pass = (int)Pass.GLOBAL)]
         public readonly bool hideButton; //Hide Menu Button
@@ -137,24 +138,7 @@ namespace MuMech
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(windowSide.ToString()))
             {
-                switch (windowSide)
-                {
-                    case WindowSide.LEFT:
-                        windowSide = WindowSide.RIGHT;
-                        break;
-                    case WindowSide.RIGHT:
-                        windowSide = WindowSide.TOP;
-                        break;
-                    case WindowSide.TOP:
-                        windowSide = WindowSide.BOTTOM;
-                        break;
-                    case WindowSide.BOTTOM:
-                        windowSide = WindowSide.LEFT;
-                        break;
-                    default:
-                        windowSide = WindowSide.RIGHT;
-                        break;
-                }
+                CycleSide();
             }
 
             if (GUILayout.Button("-", GuiUtils.LayoutNoExpandWidth))
@@ -173,6 +157,37 @@ namespace MuMech
 
             if (columns < 1)
                 columns = 1;
+        }
+
+        // shared by the IMGUI MenuPosition item and the new UI
+        internal void CycleSide()
+        {
+            switch (windowSide)
+            {
+                case WindowSide.LEFT:
+                    windowSide = WindowSide.RIGHT;
+                    break;
+                case WindowSide.RIGHT:
+                    windowSide = WindowSide.TOP;
+                    break;
+                case WindowSide.TOP:
+                    windowSide = WindowSide.BOTTOM;
+                    break;
+                case WindowSide.BOTTOM:
+                    windowSide = WindowSide.LEFT;
+                    break;
+                default:
+                    windowSide = WindowSide.RIGHT;
+                    break;
+            }
+        }
+
+        // the new UI reports the size of its panel in IMGUI units, which displayedPos and buttonPos use
+        internal void SetMeasuredSize(float width, float height)
+        {
+            Rect pos = WindowPos;
+            if (pos.width != width || pos.height != height)
+                WindowPos = new Rect(pos.x, pos.y, width, height);
         }
 
         // If the Toolbar is loaded and we don't want to display the big menu button
@@ -207,14 +222,14 @@ namespace MuMech
 
             List<DisplayModule> displayModules = Core.GetDisplayModules(DisplayOrder.instance);
             int i = 0;
-            int step = Mathf.CeilToInt((float)(displayModules.Count(d => !d.Hidden && d.ShowInCurrentScene) + 1) / columns);
+            int step = Mathf.CeilToInt((float)(displayModules.Count(d => d.ShowInMenu && !d.TechLocked && d.ShowInCurrentScene) + 1) / columns);
 
             GUILayout.BeginHorizontal();
             GUILayout.BeginVertical();
 
             foreach (DisplayModule module in displayModules)
             {
-                if (!module.Hidden && module.ShowInCurrentScene)
+                if (module.ShowInMenu && !module.TechLocked && module.ShowInCurrentScene)
                 {
                     if (i == step)
                     {
@@ -275,7 +290,7 @@ namespace MuMech
 
             SetupMainToolbarButton();
 
-            foreach (DisplayModule module in Core.GetDisplayModules(DisplayOrder.instance).Where(m => !m.Hidden))
+            foreach (DisplayModule module in Core.GetDisplayModules(DisplayOrder.instance).Where(m => m.ShowInMenu && !m.TechLocked))
             {
                 Button button;
                 if (!toolbarButtons.ContainsKey(module))
@@ -336,7 +351,7 @@ namespace MuMech
             if (featureButtons.Count == 0)
             {
                 MechJebModuleManeuverPlanner maneuverPlannerModule = Core.GetComputerModule<MechJebModuleManeuverPlanner>();
-                if (!HighLogic.LoadedSceneIsEditor && maneuverPlannerModule != null && !maneuverPlannerModule.Hidden)
+                if (!HighLogic.LoadedSceneIsEditor && maneuverPlannerModule != null && !maneuverPlannerModule.TechLocked)
                 {
                     CreateFeatureButton(maneuverPlannerModule, "Exec_Node", "MechJeb Execute Next Node", b =>
                     {
@@ -515,7 +530,8 @@ namespace MuMech
             }
         }
 
-        public override void DrawGUI(bool inEditor)
+        // the slide animation; shared by the IMGUI DrawGUI and the new UI
+        internal void AdvanceAnimation()
         {
             switch (windowStat)
             {
@@ -538,6 +554,11 @@ namespace MuMech
 
                     break;
             }
+        }
+
+        public override void DrawGUI(bool inEditor)
+        {
+            AdvanceAnimation();
 
             GUI.depth = -100;
             GUI.SetNextControlName("MechJebOpen");

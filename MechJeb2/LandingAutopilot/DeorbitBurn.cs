@@ -18,10 +18,10 @@ namespace MuMech
 
             public override AutopilotStep Drive(FlightCtrlState s)
             {
-                if (_deorbitBurnTriggered && Core.Attitude.attitudeAngleFromTarget() < 5)
+                if (_deorbitBurnTriggered && Core.Attitude.AttitudeAngleFromTarget() < 5)
                     Core.Thrust.TargetThrottle = 1.0F;
                 else
-                    Core.Thrust.TargetThrottle = 0;
+                    Core.Thrust.ThrustOff();
 
                 return this;
             }
@@ -32,7 +32,7 @@ namespace MuMech
                 //in the orbit to deorbt; we already have deorbited.
                 if (Orbit.ApA < MainBody.RealMaxAtmosphereAltitude())
                 {
-                    Core.Thrust.TargetThrottle = 0;
+                    Core.Thrust.ThrustOff();
                     return new CourseCorrection(Core);
                 }
 
@@ -96,7 +96,7 @@ namespace MuMech
                     if (!MuUtils.PhysicsRunning()) { Core.Warp.MinimumWarp(); } //get out of warp
 
                     Vector3d deltaV = finalHorizontalVelocity - currentHorizontalVelocity;
-                    Core.Attitude.attitudeTo(deltaV.normalized, AttitudeReference.INERTIAL, Core.Landing);
+                    Core.Attitude.AttitudeTo(deltaV.normalized, AttitudeReference.INERTIAL, Core.Landing);
 
                     if (deltaV.magnitude < 2.0)
                     {
@@ -107,7 +107,7 @@ namespace MuMech
                 }
                 else
                 {
-                    Core.Attitude.attitudeTo(Vector3d.back, AttitudeReference.ORBIT, Core.Landing);
+                    Core.Attitude.AttitudeTo(Vector3d.back, AttitudeReference.ORBIT, Core.Landing);
                     if (Core.Node.Autowarp) Core.Warp.WarpRegularAtRate((float)(Orbit.period / 10));
 
                     Status = Localizer.Format("#MechJeb_LandingGuidance_Status8"); //"Moving to high deorbit burn point"

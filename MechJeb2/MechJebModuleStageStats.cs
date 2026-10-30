@@ -47,6 +47,7 @@ namespace MuMech
         {
             _vesselManagerAtmo.Release();
             _vesselManagerVac.Release();
+            _vesselModified = true;
         }
 
         private readonly SimVesselManager _vesselManagerAtmo = new SimVesselManager();

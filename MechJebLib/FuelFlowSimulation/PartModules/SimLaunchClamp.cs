@@ -4,13 +4,12 @@
  */
 
 using MechJebLib.Utils;
-using static System.FormattableString;
 
 namespace MechJebLib.FuelFlowSimulation.PartModules
 {
     public class SimLaunchClamp : SimPartModule
     {
-        private static readonly ObjectPool<SimLaunchClamp> _pool = new ObjectPool<SimLaunchClamp>(New, Clear);
+        private static readonly ObjectPool<SimLaunchClamp> _pool = new ObjectPool<SimLaunchClamp>(New, m => m.Clear());
 
         public override void Dispose() => _pool.Release(this);
 
@@ -22,10 +21,6 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
         }
 
         private static SimLaunchClamp New() => new SimLaunchClamp();
-
-        private static void Clear(SimLaunchClamp m)
-        {
-        }
 
         public override string ToString() => ModuleLine("SimLaunchClamp", CommonFieldList());
     }

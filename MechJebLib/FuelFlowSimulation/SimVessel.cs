@@ -11,7 +11,6 @@ using MechJebLib.FuelFlowSimulation.PartModules;
 using MechJebLib.Primitives;
 using MechJebLib.Utils;
 using static System.FormattableString;
-using static MechJebLib.Utils.Statics;
 
 namespace MechJebLib.FuelFlowSimulation
 {
@@ -86,6 +85,29 @@ namespace MechJebLib.FuelFlowSimulation
             U = u;
         }
 
+        // Indexes the engines and RCS by the stage they activate in and the stage they are dropped in, this must be
+        // called after the DecouplingAnalyzer has set the DecoupledInStage of the parts.
+        public void UpdateEngineSet()
+        {
+            foreach (SimPart part in Parts)
+            {
+                foreach (SimPartModule m in part.Modules)
+                {
+                    if (m is SimModuleEngines e)
+                    {
+                        EnginesActivatedInStage[part.InverseStage].Add(e);
+                        EnginesDroppedInStage[part.DecoupledInStage].Add(e);
+                    }
+
+                    if (m is SimModuleRCS r)
+                    {
+                        RCSActivatedInStage[part.InverseStage].Add(r);
+                        RCSDroppedInStage[part.DecoupledInStage].Add(r);
+                    }
+                }
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void SetupStageAndAHalf(double endMass)
         {
@@ -149,12 +171,13 @@ namespace MechJebLib.FuelFlowSimulation
 
                     e.UpdateEngineStatus();
 
-                    if (!e.IsOperational)
-                        continue;
-
                     ActiveEngines.Add(e);
                 }
             }
+
+            // UpdateEngineStatus() can shut down an engine and, with AutoCutoff, its symmetry counterparts which may already
+            // be in the list, so filter once every status is updated
+            ActiveEngines.RemoveAll(e => !e.IsOperational);
 
             ComputeThrustAndSpoolup();
         }
@@ -213,9 +236,6 @@ namespace MechJebLib.FuelFlowSimulation
             {
                 SimModuleEngines e = ActiveEngines[i];
 
-                if (!e.IsOperational)
-                    continue;
-
                 SpoolupCurrent += e.ThrustCurrent.magnitude * e.ModuleSpoolupTime;
 
                 e.Update();
@@ -228,7 +248,7 @@ namespace MechJebLib.FuelFlowSimulation
             ThrustMagnitude = ThrustCurrent.magnitude;
             ThrustMinMagnitude = ThrustMin.magnitude;
             ThrustMaxMagnitude = ThrustMax.magnitude;
-            SpoolupCurrent /= ThrustCurrent.magnitude;
+            SpoolupCurrent = ThrustMagnitude > 0 ? SpoolupCurrent / ThrustMagnitude : 0;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -269,6 +289,7 @@ namespace MechJebLib.FuelFlowSimulation
             v.RCSActivatedInStage.Clear();
             v.RCSDroppedInStage.Clear();
             v.ActiveEngines.Clear();
+            v.ActiveRcs.Clear();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -307,9 +328,10 @@ namespace MechJebLib.FuelFlowSimulation
         {
             var sb = new StringBuilder();
             sb.AppendLine("SimVessel:");
-            sb.AppendLine(Invariant($"  CurrentStage={CurrentStage} HasLaunchClamp={HasLaunchClamp} MainThrottle={MainThrottle}"));
-            sb.AppendLine(Invariant($"  ATMPressure={ATMPressure} ATMDensity={ATMDensity} MachNumber={MachNumber}"));
-            sb.AppendLine(Invariant($"  T={T} R={R} V={V} U={U}"));
+            // the doubles are G17 (and floats G9) throughout the dumps so the values round-trip into test fixtures
+            sb.AppendLine(Invariant($"  CurrentStage={CurrentStage} HasLaunchClamp={HasLaunchClamp} MainThrottle={MainThrottle:G17}"));
+            sb.AppendLine(Invariant($"  ATMPressure={ATMPressure:G17} ATMDensity={ATMDensity:G17} MachNumber={MachNumber:G17}"));
+            sb.AppendLine(Invariant($"  T={T:G17} R={R} V={V} U={U}"));
             sb.AppendLine(Invariant($"  Parts ({Parts.Count}):"));
             foreach (SimPart part in Parts)
                 sb.AppendLine(part.ToString().Indent(4));

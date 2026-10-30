@@ -1,7 +1,8 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using System.IO;
 using JetBrainsAnnotations::JetBrains.Annotations;
+using static MechJebLib.Utils.Statics;
 
 namespace MuMech
 {
@@ -135,26 +136,26 @@ namespace MuMech
         private readonly bool _paused = false;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MarkUT", InfoItem.Category.Recorder, format = ValueInfoItem.TIME)]
-         //Mark UT
+        //Mark UT
         public double MarkUT;
 
         [ValueInfoItem("#MechJeb_TimeSinceMark", InfoItem.Category.Recorder, format = ValueInfoItem.TIME)] //Time since mark
         public double TimeSinceMark;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_DVExpended", InfoItem.Category.Recorder, format = "F1", units = "m/s")]
-         //ΔV expended
+        //ΔV expended
         public double DeltaVExpended;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_DragLosses", InfoItem.Category.Recorder, format = "F1", units = "m/s")]
-         //Drag losses
+        //Drag losses
         public double DragLosses;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_GravityLosses", InfoItem.Category.Recorder, format = "F1", units = "m/s")]
-         //Gravity losses
+        //Gravity losses
         public double GravityLosses;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_SteeringLosses", InfoItem.Category.Recorder, format = "F1", units = "m/s")]
-         //Steering losses
+        //Steering losses
         public double SteeringLosses;
 
         [ValueInfoItem("#MechJeb_PhaseAngleFromMark", InfoItem.Category.Recorder, format = "F2", units = "º")] //Phase angle from mark
@@ -169,23 +170,23 @@ namespace MuMech
             Vector3d vesselVector = VesselState.CoM - markBody.transform.position;
             double traversedAngle = Vector3d.Angle(markVector, vesselVector);
             double circularOrbitAngle = 360 * TimeSinceMark / Orbit.CircularOrbitPeriod();
-            return MuUtils.ClampDegrees360(circularOrbitAngle - traversedAngle);
+            return Clamp360(circularOrbitAngle - traversedAngle);
         }
 
         [Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MarkLAN", InfoItem.Category.Recorder, format = ValueInfoItem.ANGLE_EW)]
-         //Mark LAN
+        //Mark LAN
         public double MarkLAN;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MarkLatitude", InfoItem.Category.Recorder, format = ValueInfoItem.ANGLE_NS)]
-         //Mark latitude
+        //Mark latitude
         public double MarkLatitude;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MarkLongitude", InfoItem.Category.Recorder, format = ValueInfoItem.ANGLE_EW)]
-         //Mark longitude
+        //Mark longitude
         public double MarkLongitude;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MarkAltitudeASL", InfoItem.Category.Recorder, format = ValueInfoItem.SI, units = "m")]
-         //Mark altitude ASL
+        //Mark altitude ASL
         public double MarkAltitude;
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL)]
@@ -201,7 +202,7 @@ namespace MuMech
                 FlightGlobals.Bodies[MarkBodyIndex].position);
 
         [UsedImplicitly, ValueInfoItem("#MechJeb_DownrangeDistance", InfoItem.Category.Recorder, format = ValueInfoItem.SI, units = "m")]
-         //Downrange distance
+        //Downrange distance
         public double GroundDistanceFromMark()
         {
             CelestialBody markBody = FlightGlobals.Bodies[MarkBodyIndex];
@@ -211,7 +212,7 @@ namespace MuMech
         }
 
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL), ValueInfoItem("#MechJeb_MaxDragGees", InfoItem.Category.Recorder, format = "F2")]
-         //Max drag gees
+        //Max drag gees
         public double MaxDragGees;
 
         [ActionInfoItem("MARK", InfoItem.Category.Recorder)]
@@ -338,7 +339,7 @@ namespace MuMech
             if (!Directory.Exists(exportPath))
                 Directory.CreateDirectory(exportPath);
 
-            string vesselName = Vessel != null ? string.Join("_", Vessel.vesselName.Split(Path.GetInvalidFileNameChars())) : "";
+            string vesselName = Vessel != null ? MuUtils.SanitizeFileName(Vessel.vesselName) : "";
 
             string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
 

@@ -66,8 +66,8 @@ namespace MechJebLib.HoverslamSimulation
         {
             Rtol = 1e-6,
             Atol = 1e-6,
-            Maxiter = 2000,
-            ThrowOnMaxIter = true,
+            MaxEvals = 12000,
+            ThrowOnMaxEvals = true,
             ThrowOnMinStep = false
         };
 
@@ -225,6 +225,8 @@ namespace MechJebLib.HoverslamSimulation
 
         public override void Run(object? o = null)
         {
+            _solver.CancellationToken = CancelToken;
+
             (double maxT, double minT) = GenerateBracketGuess();
 
             double t1 = SafeRootSolve(minT, maxT);
@@ -245,7 +247,7 @@ namespace MechJebLib.HoverslamSimulation
         public void Rhs(Vec yin, double x, Vec dyout)
         {
             // TODO: normalization
-            //Check.True(_phase.Normalized);
+            //CheckDebug.True(_phase.Normalized);
 
             var y = HoverslamLayout.CreateFrom(yin);
             var dy = new HoverslamLayout();

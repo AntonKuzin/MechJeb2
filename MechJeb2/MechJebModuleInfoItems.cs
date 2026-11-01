@@ -21,7 +21,7 @@ namespace MuMech
 
         //Provides a unified interface for getting the parts list in the editor or in flight:
         private List<Part> parts =>
-            HighLogic.LoadedSceneIsEditor ? EditorLogic.fetch.ship.parts :
+            HighLogic.LoadedSceneIsEditor ? VesselExtensions.EditorParts :
             Vessel == null ? new List<Part>() : Vessel.Parts;
 
         [ValueInfoItem("#MechJeb_NodeBurnTime", InfoItem.Category.Misc)] //Node burn time
@@ -257,7 +257,7 @@ namespace MuMech
         {
             if (!HighLogic.LoadedSceneIsEditor) return VesselState.Mass;
             double mass = 0;
-            foreach (Part p in EditorLogic.fetch.ship.parts) mass += p.mass + p.GetResourceMass();
+            foreach (Part p in VesselExtensions.EditorParts) mass += p.mass + p.GetResourceMass();
             return mass;
         }
 
@@ -288,7 +288,7 @@ namespace MuMech
         public double LiquidFuelAndOxidizerMass() => Vessel.TotalResourceMass("LiquidFuel") + Vessel.TotalResourceMass("Oxidizer");
 
         [ValueInfoItem("#MechJeb_MonopropellantMass", InfoItem.Category.Vessel, showInEditor = true, format = "F2",
-            units = "kg")] //Monopropellant mass
+            units = "t")] //Monopropellant mass
         public double MonoPropellantMass() => Vessel.TotalResourceMass("MonoPropellant");
 
         [ValueInfoItem("#MechJeb_TotalElectricCharge", InfoItem.Category.Vessel, showInEditor = true, format = ValueInfoItem.SI,
@@ -308,7 +308,7 @@ namespace MuMech
         {
             if (HighLogic.LoadedSceneIsEditor) return 1000 * EditorLastStageThrust(true);
 
-            return VesselState.ThrustMinimum;
+            return 1000 * VesselState.ThrustMinimum;
         }
 
         // Thrust of the engines in the editor's last stage, in kN: at full throttle, or at minimum (throttle-locked engines
@@ -316,7 +316,7 @@ namespace MuMech
         private static double EditorLastStageThrust(bool minimum)
         {
             double thrust = 0;
-            foreach (Part part in EditorLogic.fetch.ship.parts)
+            foreach (Part part in VesselExtensions.EditorParts)
             {
                 if (part.inverseStage != StageManager.LastStage) continue;
                 for (int i = 0; i < part.Modules.Count; i++)
@@ -382,7 +382,7 @@ namespace MuMech
         {
             double cost = 0;
             foreach (Part p in parts) cost += p.partInfo.cost;
-            return cost * 1000;
+            return cost;
         }
 
         [ValueInfoItem("#MechJeb_CrewCount", InfoItem.Category.Vessel)] //Crew count
@@ -616,7 +616,7 @@ namespace MuMech
         public string TargetEccentricity()
         {
             if (!Core.Target.NormalTargetExists) return "N/A";
-            return GuiUtils.TimeToDHMS(Core.Target.TargetOrbit.eccentricity);
+            return Core.Target.TargetOrbit.eccentricity.ToString("F3");
         }
 
         [ValueInfoItem("#MechJeb_TargetSMA", InfoItem.Category.Target)] //Target SMA
@@ -868,9 +868,12 @@ namespace MuMech
 
             float vacTimeLeft = (float)stats.VacStats[stats.VacStats.Count - 1].DeltaTime;
             float atmoTimeLeft = (float)stats.AtmoStats[stats.AtmoStats.Count - 1].DeltaTime;
-            float timeLeft = Mathf.Lerp(vacTimeLeft, atmoTimeLeft, Mathf.Clamp01((float)FlightGlobals.getStaticPressure()));
 
-            return timeLeft;
+            // live, the atmosphere stats are already at the vessel's conditions, and in the editor at the chosen body and altitude.
+            // Blending those with vacuum would be wrong for a jet, whose vacuum time can be millions of seconds.
+            if (HighLogic.LoadedSceneIsEditor || stats.LiveSLT) return atmoTimeLeft;
+
+            return Mathf.Lerp(vacTimeLeft, atmoTimeLeft, Mathf.Clamp01((float)(Vessel.staticPressurekPa * PhysicsGlobals.KpaToAtmospheres)));
         }
 
         [ValueInfoItem("#MechJeb_StageTimeCurrentThrottle", InfoItem.Category.Vessel, format = ValueInfoItem.TIME)] //Stage time (current throttle)

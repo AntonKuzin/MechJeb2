@@ -35,14 +35,14 @@ namespace KodeKit
         public ComboBox(KodeWindow w, UIObject parent, Func<int> get, Action<int> set, Func<string[]> entries, bool flexible = true)
         {
             this.get = get;
-            this.set = set;
+            this.set = w.Edits(set);
             this.entries = entries;
             Button = KodeWindow.Button(parent, "", Toggle, flexible);
             label = Button.GetComponentInChildren<TMP_Text>();
 
             // a dropdown field: dark field background, entry on the left, a caret on the right
-            Button.ChildAlignment(TextAnchor.MiddleLeft);
-            Button.Padding(6, 18, 1, 1);
+            Button.Content.ChildAlignment(TextAnchor.MiddleLeft);
+            Button.Content.Padding(6, 18, 1, 1);
             label.alignment = TextAlignmentOptions.Left;
             var caretGo = new GameObject("Caret", typeof(RectTransform), typeof(UnityEngine.UI.Image), typeof(UnityEngine.UI.LayoutElement));
             caretGo.layer = Button.gameObject.layer;
@@ -195,7 +195,7 @@ namespace KodeKit
                 int k = i;
                 UIButton b = KodeWindow.Button(panel, e[i], () => Select(k), true);
                 b.GetComponentInChildren<TMP_Text>().alignment = TextAlignmentOptions.Left;
-                if (Group != null) b.Padding(14, 6, 1, 1);
+                if (Group != null) b.Content.Padding(14, 6, 1, 1);
             }
             panel.gameObject.AddComponent<LayoutElement>().minWidth = ((RectTransform)Button.transform).rect.width;
 

@@ -82,9 +82,6 @@ namespace KodeKit
         public double DataMaxX;             // rightmost data x
         public double ViewMin;              // left edge of the view
 
-        /// <summary>Give each plot its own nested Canvas.</summary>
-        public static bool NestedCanvas;
-
         readonly RectTransform frame;
 
         /// <param name="scrollbarParent">Where the scrollbar row goes (null: under the plot, indented past the Y labels).
@@ -95,11 +92,6 @@ namespace KodeKit
             // Y labels column, fixed width, absolute positions
             RectTransform labels = Graphs.Surface(area, 70, height, "YLabels");
             Plot = Graphs.Surface(area, width, height, "Plot");
-            if (NestedCanvas)
-            {
-                // own canvas: redrawing the lines re-batches only the plot, not the whole appCanvas
-                Plot.gameObject.AddComponent<Canvas>();
-            }
             Plot.gameObject.AddComponent<RectMask2D>();
             Graphs.Background(Plot, new Color(0.15f, 0.25f, 0.45f), new Color(0.02f, 0.02f, 0.08f));
             // GUILayout.Box's border around the plot, kept above the series (AddSeries moves it back on top)
@@ -123,7 +115,8 @@ namespace KodeKit
                 UIText t = KodeWindow.LiveLabel(labels.GetComponent<UIObject>(), "-000.0 k", false);
                 RectTransform cell = (RectTransform)t.transform.parent;
                 cell.anchorMin = cell.anchorMax = new Vector2(1, i / (labelCount - 1f));
-                cell.pivot = new Vector2(1, 0.5f);
+                // centred on its tick, an end label would stick out over the rows around the plot
+                cell.pivot = new Vector2(1, i == 0 ? 0 : i == labelCount - 1 ? 1 : 0.5f);
                 cell.anchoredPosition = new Vector2(-4, 0);
                 cell.sizeDelta = new Vector2(66, 18);
                 t.tmpText.alignment = TextAlignmentOptions.Right;
@@ -168,7 +161,7 @@ namespace KodeKit
 
             foreach (LineSeriesGraphic s in Series) Apply(s, yMin, yMax);
             Apply(Stages, 0, 1);
-            if (Stagger) pending = Series.Count + 1;
+            pending = Series.Count + 1;
 
             for (int i = 0; i < yChars.Length; i++)
             {
@@ -183,12 +176,9 @@ namespace KodeKit
             s.XMax = ViewMin + VisibleWidth;
             s.YMin = yMin;
             s.YMax = yMax;
-            if (!Stagger) s.SetVerticesDirty();
         }
 
-        /// <summary>Rebuild one series per frame after a Refresh instead of all at once (spreads the mesh cost).</summary>
-        public static bool Stagger = true;
-
+        // after a Refresh, one series is rebuilt per frame instead of all at once (spreads the mesh cost)
         int pending;
 
         /// <summary>Called every frame (registered as a window sync).</summary>

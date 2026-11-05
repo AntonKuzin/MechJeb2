@@ -61,7 +61,8 @@ namespace MechJebLib.Maneuvers
             }
 
             Dual fi0 = 0.5 * dv1.sqrMagnitude;
-            if (IsFinite(_peR) && _soi2 > 0 && _captureBurn)
+            // a periapsis of 0 has no circular velocity, and the cost would be inf - inf
+            if (IsFinite(_peR) && _peR > 0 && _soi2 > 0 && _captureBurn)
             {
                 Dual sma = Astro.SmaFromStateVectors(1.0, rsoi2, vsoi2);
                 Dual dv = Astro.VelocityFromRadiusSMA(1.0, _peR, sma) - Astro.CircularVelocity(1.0, _peR);
@@ -209,21 +210,21 @@ namespace MechJebLib.Maneuvers
         private const double INC_CLAMP_MARGIN = 2 * DEG2RAD;
         private const int NVARIABLES = 16;
 
-        public (V3 dv, double dt1, double dt2, double dt3) Maneuver(V3 r0, V3 v0, double mu1, V3 r1, V3 v1, double soi1, double mu2, V3 r2, V3 v2, double soi2, double mu3, double arrivalDT, double arrivalDTlower = 0, double arrivalDTupper = double.PositiveInfinity, double peR = double.PositiveInfinity, double inc = double.NaN, bool captureBurn = false, bool optguard = false)
+        public (V3 dv, double dt1, double dt2, double dt3) Maneuver(V3 r0, V3 v0, double mu1, V3 r1, V3 v1, double soi1, double mu2, V3 r2, V3 v2, double soi2, double mu3, double arrivalDT, double arrivalDTlower = 0, double arrivalDTupper = double.PositiveInfinity, double peR = double.PositiveInfinity, double inc = double.NaN, bool captureBurn = false, bool optguard = false, double dt1Min = double.NegativeInfinity)
         {
             Print($"InterplanetaryTransfer.Maneuver({r0}, {v0}, {mu1:G17}, {r1}, {v1}, {soi1:G17}, {mu2:G17}, {r2}, {v2}, {soi2:G17}, {mu3:G17}, {arrivalDT:G17}, arrivalDTlower: {arrivalDTlower:G17} arrivalDTupper: {arrivalDTupper:G17}, peR: {peR:G17}, inc: {inc:G17}, captureBurn: {captureBurn})");
-            CheckDebug.PositiveFinite(mu1);
-            CheckDebug.NonNegativeFinite(mu2);
-            CheckDebug.PositiveFinite(mu3);
-            CheckDebug.Finite(r0);
-            CheckDebug.Finite(v0);
-            CheckDebug.Finite(r1);
-            CheckDebug.Finite(v1);
-            CheckDebug.Finite(r2);
-            CheckDebug.Finite(v2);
-            CheckDebug.PositiveFinite(soi1);
-            CheckDebug.NonNegativeFinite(soi2);
-            CheckDebug.NonNegative(peR);
+            Check.PositiveFinite(mu1);
+            Check.NonNegativeFinite(mu2);
+            Check.PositiveFinite(mu3);
+            Check.Finite(r0);
+            Check.Finite(v0);
+            Check.Finite(r1);
+            Check.Finite(v1);
+            Check.Finite(r2);
+            Check.Finite(v2);
+            Check.PositiveFinite(soi1);
+            Check.NonNegativeFinite(soi2);
+            Check.NonNegative(peR);
 
             // problem scaling
 
@@ -321,8 +322,10 @@ namespace MechJebLib.Maneuvers
             }
 
             double period = Astro.PeriodFromStateVectors(1.0, _r0, _v0);
-            bndl[0] = -period;
-            bndu[0] = period;
+            // the burn may be up to a period before the epoch, but not before dt1Min (the start of the orbit it is planned on)
+            bndl[0] = Max(-period, dt1Min / _sourceScale.TimeScale);
+            bndu[0] = Max(period, bndl[0] + period);
+            x0[0]   = Clamp(x0[0], bndl[0], bndu[0]);
             bndl[1] = EPS;
             bndl[2] = Max(arrivalDTlower / _helioScale.TimeScale, EPS);
             bndu[2] = arrivalDTupper / _helioScale.TimeScale;
@@ -338,6 +341,10 @@ namespace MechJebLib.Maneuvers
                 // alglibexception never passes its message to the base constructor, so Message is useless
                 throw new Exception(e.msg, e);
             }
+
+            // the same bound RunOptimizer calls significantly infeasible: past it, the plan doesn't reach the target as asked
+            if (!(sol.err <= 1e-4))
+                throw new ConvergenceException($"InterplanetaryTransfer: no transfer meets the constraints, constraint error {sol.err:G3}");
 
             Print($"dv: {sol.dv * _sourceScale.VelocityScale} dt1: {sol.dt1 * _sourceScale.TimeScale} dt2: {sol.dt2 * _sourceScale.TimeScale}, dt3: {sol.dt3 * _helioScale.TimeScale}");
             return (sol.dv * _sourceScale.VelocityScale, sol.dt1 * _sourceScale.TimeScale, sol.dt2 * _sourceScale.TimeScale, sol.dt3 * _helioScale.TimeScale);
@@ -471,7 +478,7 @@ namespace MechJebLib.Maneuvers
                 // the margin is because the inclination at the limit is degenerate (the two b-plane solutions merge), and
                 // because rotating the plane moves the soi entry point which moves v-infinity a bit.
                 (_, _, rsoi2, vsoi2, _, _, _, _, _) = EvaluateTrajectory(x2);
-                double decl = Asin(Abs(IncomingAsymptote(1.0, rsoi2, vsoi2).z));
+                double decl = SafeAsin(Abs(IncomingAsymptote(1.0, rsoi2, vsoi2).z));
                 double cosIncMax = Cos(Min(decl + INC_CLAMP_MARGIN, PI / 2));
                 if (Abs(_cosInc) > cosIncMax)
                 {

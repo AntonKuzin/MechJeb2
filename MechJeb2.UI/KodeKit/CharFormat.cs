@@ -57,13 +57,14 @@ namespace KodeKit
             if (Math.Abs(v) * pow10[decimals] >= 9.2e18) return Append(v.ToString("F" + decimals));
             if (v < 0)
             {
-                // .NET Framework prints -0.001 as "0.00", not "-0.00"
+                // ToString prints -0.001 as "0.00", not "-0.00" (KSP's Mono, checked in game)
                 if (Math.Round(-(decimal)v, decimals, MidpointRounding.AwayFromZero) > 0) Append('-');
                 v = -v;
             }
 
-            // round through decimal: (decimal)double keeps 15 significant digits, like .NET Framework's ToString("F"),
-            // so 1.005 -> "1.01" exactly as MechJeb's strings show it
+            // round through decimal: (decimal)double keeps 15 significant digits, so 1.005 -> "1.01" as KSP's Mono
+            // ToString("F2") prints it. A value 1 ulp under a rounding edge can still differ: Mono prints
+            // -0.0049999999999999949 as "0.00" at F2, this gives "-0.01" (the only one of 455 edge cases tried)
             long n =(long)(Math.Round((decimal)v, decimals, MidpointRounding.AwayFromZero) * (decimal)pow10[decimals]);
             long ip = n / (long)pow10[decimals];
             long fp = n % (long)pow10[decimals];
@@ -106,12 +107,17 @@ namespace KodeKit
         public CharText AppendDHMS(double seconds, int decimalPlaces, int hoursPerDay, int daysPerYear)
         {
             if (double.IsInfinity(seconds) || double.IsNaN(seconds)) return Append("Inf");
+            // GuiUtils.TimeToDHMS: from a thousand years, years with an SI prefix ("398.6 Ma")
+            double years = seconds / ((double)hoursPerDay * 3600 * daysPerYear);
+            if (Math.Abs(years) >= 1000) return AppendSI(years).Append('a');
             int start = len;
-            if (seconds < 0)
-            {
-                Append('-');
-                seconds = -seconds;
-            }
+            bool negative = seconds < 0;
+            seconds = Math.Abs(seconds);
+            // round to the decimals shown before splitting into units: 239.97 s is "4m 00.0s", not "3m 60.0s"
+            if (decimalPlaces > 0)
+                seconds = (double)Math.Round((decimal)seconds, Math.Min(decimalPlaces, 9), MidpointRounding.AwayFromZero);
+            // no "-00.0s" for a value that rounds to zero
+            if (negative && (decimalPlaces > 0 ? seconds > 0 : seconds >= 1)) Append('-');
             long year = (long)hoursPerDay * 3600 * daysPerYear, day = (long)hoursPerDay * 3600;
             long y = (long)(seconds / year);
             long d = (long)(seconds % year / day);
@@ -127,7 +133,7 @@ namespace KodeKit
             // GuiUtils.TimeToDHMS tests the remaining seconds (always < 60 here), so decimals always show when asked
             if (decimalPlaces > 0)
             {
-                if (Math.Round(s, decimalPlaces) < 10) Append('0'); // GuiUtils uses "00.0" here
+                if (s < 10) Append('0'); // GuiUtils uses "00.0" here; s is already rounded
                 Append(s, decimalPlaces);
             }
             else Pad((long)s, any ? 2 : 1);

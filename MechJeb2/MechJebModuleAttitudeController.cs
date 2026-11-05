@@ -36,7 +36,7 @@ namespace MuMech
         private readonly bool _attitudeRCSControl = true;
 
         [Persistent(pass = (int)Pass.GLOBAL)]
-        [ValueInfoItem("#MechJeb_SteeringError", InfoItem.Category.Vessel, format = "F1", units = "º")]
+        [ValueInfoItem("#MechJeb_SteeringError", InfoItem.Category.Vessel, format = "F1", units = "°")]
         //Steering error
         public readonly MovingAverage SteeringError = new MovingAverage();
 
@@ -58,7 +58,7 @@ namespace MuMech
 
         public void SetActiveController(int i)
         {
-            ActiveController = i;
+            ActiveController = Math.Max(0, Math.Min(i, _controllers.Count - 1));
             Controller = _controllers[ActiveController];
             Controller.OnStart();
         }
@@ -117,7 +117,6 @@ namespace MuMech
             _controllers.Add(new KosAttitudeController(this));
             _controllers.Add(new HybridController(this));
             _controllers.Add(new BetterController(this));
-            _controllers.Add(new LQRController(this));
 
             Controller = new BetterController(this);
         }
@@ -260,7 +259,7 @@ namespace MuMech
 
             Vector3 dir = direction;
 
-            Vector3 up = !Enabled ? AttitudeWorldToReference(-Vessel.GetTransform().forward, reference) : AttitudeWorldToReference(AttitudeReferenceToWorld(AttitudeTarget * Vector3d.up, reference), reference);
+            Vector3 up = !Enabled ? AttitudeWorldToReference(-Vessel.GetTransform().forward, reference) : AttitudeWorldToReference(AttitudeReferenceToWorld(AttitudeTarget * Vector3d.up, AttitudeReference), reference);
             Vector3.OrthoNormalize(ref dir, ref up);
             AttitudeTo(QuaternionD.LookRotation(dir, up), reference, controller, axisCtrlRoll: killRollRotation);
             if (killRollRotation) { SetOmegaTarget(roll: 0); }
@@ -321,6 +320,7 @@ namespace MuMech
         public void AttitudeDeactivate()
         {
             Users.Clear();
+            AttitudeKillRot = false;
             _attitudeChanged = true;
         }
 
@@ -364,7 +364,7 @@ namespace MuMech
             {
                 if (AttitudeReference != AttitudeReference.INERTIAL && AttitudeReference != AttitudeReference.INERTIAL_COT) AttitudeKillRot = false;
 
-                if (!(Controller is BetterController) && !(Controller is LQRController))
+                if (!(Controller is BetterController))
                     Controller.Reset();
 
                 _attitudeChanged = false;

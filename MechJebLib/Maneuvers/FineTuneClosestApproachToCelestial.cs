@@ -118,19 +118,23 @@ namespace MechJebLib.Maneuvers
         private const int NUM_EQUALITY_CONSTRAINTS = 5;
         private const int NUM_INEQUALITY_CONSTRAINTS = 1;
         private const int MAXITS = 500;
+
+        // in the scaled units of the constraints, as InterplanetaryTransfer's "significantly infeasible"
+        private const double MAX_CONSTRAINT_ERROR = 1e-4;
         private const int NVARIABLES = 7;
 
         public (V3 dv, double dt1, double dt2) Maneuver(double mu0, V3 r0, V3 v0, double mu1, V3 r1, V3 v1, double soi, double tsoi, double peR, double dt = double.NaN, double inc = double.NaN)
         {
             Print($"FineTuneClosestApproachToCelestial.Maneuver({mu0:G17}, {r0}, {v0}, {mu1:G17}, {r1}, {v1}, {soi:G17}, {tsoi:G17}, {peR:G17}, {dt:G17}, {inc:G17})");
-            CheckDebug.PositiveFinite(mu0);
-            CheckDebug.Finite(r0);
-            CheckDebug.Finite(v0);
-            CheckDebug.PositiveFinite(mu1);
-            CheckDebug.Finite(r1);
-            CheckDebug.Finite(v1);
-            CheckDebug.PositiveFinite(soi);
-            CheckDebug.NonNegativeFinite(peR);
+            Check.PositiveFinite(mu0);
+            Check.Finite(r0);
+            Check.Finite(v0);
+            Check.PositiveFinite(mu1);
+            Check.Finite(r1);
+            Check.Finite(v1);
+            Check.PositiveFinite(soi);
+            Check.PositiveFinite(tsoi); // the coast to the SOI: a burn after the encounter, or an orbit that never leaves, has none
+            Check.NonNegativeFinite(peR);
 
             _planetScale = Scale.Create(mu0, Sqrt(r0.magnitude * r1.magnitude));
 
@@ -229,6 +233,17 @@ namespace MechJebLib.Maneuvers
             bool decideOnError = longError > 1e-10 || shortError > 1e-10;
 
             bool pickShort = decideOnError ? shortError < longError : shortCost < longCost;
+
+            // the least-bad point of an infeasible request isn't a plan for it (e.g. an inclination the arrival can't reach): check the
+            // picked branch's equality constraints, the periapsis, the inclination when one is asked for, and the SOI patch. The
+            // inequality, arriving inbound, is left out: a periapsis at the SOI only grazes it.
+            _direction = pickShort ? TransferGeometry.ShortWay : TransferGeometry.LongWay;
+            NLPFunction(pickShort ? x1 : x2, fi, jac);
+            double error = 0;
+            for (int i = 1; i <= NUM_EQUALITY_CONSTRAINTS; i++)
+                error = Max(error, Abs(fi[i]));
+            if (!(error <= MAX_CONSTRAINT_ERROR))
+                throw new ConvergenceException($"FineTuneClosestApproachToCelestial: the periapsis and inclination can't be met, constraint error {error:G3}");
 
             if (pickShort)
             {

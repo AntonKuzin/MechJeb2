@@ -4,11 +4,6 @@ using UnityEngine;
 namespace MuMech.UI
 {
     /// <summary>
-    /// A KodeKit window for one DisplayModule. The module stays the source of truth for open/closed (Enabled),
-    /// position (WindowVector in flight, WindowVectorEditor in the editor, in IMGUI units / GuiUtils.Scale),
-    /// window lock and persistence; the view only draws it.
-    /// </summary>
-    /// <summary>
     /// Marks a KodeView as the new-UI window of a DisplayModule type. The view needs a public constructor
     /// taking that module; KodeHost finds every marked view by reflection.
     /// </summary>
@@ -19,6 +14,11 @@ namespace MuMech.UI
         public KodeViewForAttribute(System.Type module) => Module = module;
     }
 
+    /// <summary>
+    /// A KodeKit window for one DisplayModule. The module stays the source of truth for open/closed (Enabled),
+    /// position (WindowVector in flight, WindowVectorEditor in the editor, in IMGUI units / GuiUtils.Scale),
+    /// window lock and persistence; the view only draws it.
+    /// </summary>
     public abstract class KodeView
     {
         public readonly DisplayModule Module;
@@ -41,23 +41,27 @@ namespace MuMech.UI
         /// <summary>The last Build's cost in ms: creating the window's contents, and the canvas update that lays it out (for tests).</summary>
         public static double LastContentsMs, LastCanvasMs;
 
+        // timestamps rather than a Stopwatch object: no allocation per build for numbers only tests read
+        static double MsSince(long start) => (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
         public void Build(RectTransform canvas)
         {
-            var timer = System.Diagnostics.Stopwatch.StartNew();
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
             Window = new KodeWindow(canvas, Module.GetName(), MinWidth, Vector2.zero);
             Window.OnClose = () => Module.Enabled = false;
             Window.Edited = () => Module.Dirty = true;
             BuildContents(Window);
             builtOverlay = Module.IsOverlay;
             if (builtOverlay) MakeOverlay();
-            LastContentsMs = timer.Elapsed.TotalMilliseconds;
-            timer.Restart();
+            LastContentsMs = MsSince(start);
+            start = System.Diagnostics.Stopwatch.GetTimestamp();
             Canvas.ForceUpdateCanvases();
-            LastCanvasMs = timer.Elapsed.TotalMilliseconds;
+            LastCanvasMs = MsSince(start);
             ApplyScale();
             Vector4 v = StoredPosition;
             Window.Behaviour.SetImguiPosition(new Vector2(v.x, v.y), GuiUtils.Scale);
             Window.Behaviour.Moved = _ => StorePosition();
+            Window.Behaviour.BringToFront();
         }
 
         public void ApplyScale()
@@ -123,12 +127,28 @@ namespace MuMech.UI
             });
         }
 
+        /// <summary>The window lets the pointer through to what's under it. Only the editor can turn this off again.</summary>
+        protected virtual bool ClickThrough => false;
+
+        CanvasGroup clickThroughGroup;
+
+        void ApplyClickThrough()
+        {
+            if (clickThroughGroup == null)
+            {
+                if (!ClickThrough) return;
+                clickThroughGroup = Window.Root.gameObject.AddComponent<CanvasGroup>();
+            }
+            clickThroughGroup.blocksRaycasts = !ClickThrough;
+        }
+
         bool beforeSyncFailed;
 
         public void Sync()
         {
             if (Module.IsOverlay != builtOverlay) RebuildRequested = true;
             Window.Behaviour.Draggable = !Module.WindowLocked;
+            ApplyClickThrough();
             // when the view's own per-frame work throws, the window's bindings still run (each isolated by KodeWindow.Sync)
             try
             {

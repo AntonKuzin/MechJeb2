@@ -123,13 +123,7 @@ namespace MuMech
         public string MechJebInfoItemsLabel1;
 
         [NonSerialized]
-        public string MechJebInfoItemsShowEmpty, MechJebInfoItemsHideEmpty;
-
-        [NonSerialized]
-        public string MechJebInfoItemsButton5;
-
-        [NonSerialized]
-        public string MechJebInfoItemsButton6;
+        public string MechJebInfoItemsShowEmpty, MechJebInfoItemsHideEmpty, MechJebInfoItemsRcs, MechJebInfoItemsEngine;
 
         [NonSerialized]
         public string MechJebInfoItemsStatsColumn0,
@@ -269,9 +263,6 @@ namespace MuMech
             MechJebInfoItemsUnlimitedText = Localizer.Format("#MechJeb_InfoItems_UnlimitedText");
             MechJebInfoItemsLabel1 = Localizer.Format("#MechJeb_InfoItems_label1");
 
-            MechJebInfoItemsButton5 = Localizer.Format("#MechJeb_InfoItems_button5");
-            MechJebInfoItemsButton6 = Localizer.Format("#MechJeb_InfoItems_button6");
-
             MechJebInfoItemsStatsColumn0 = Localizer.Format("#MechJeb_InfoItems_StatsColumn0");
             MechJebInfoItemsStatsColumn1 = Localizer.Format("#MechJeb_InfoItems_StatsColumn1");
             MechJebInfoItemsStatsColumn2 = Localizer.Format("#MechJeb_InfoItems_StatsColumn2");
@@ -289,6 +280,8 @@ namespace MuMech
 
             MechJebInfoItemsShowEmpty = Localizer.Format("#MechJeb_InfoItems_showEmpty");
             MechJebInfoItemsHideEmpty = Localizer.Format("#MechJeb_InfoItems_hideEmpty");
+            MechJebInfoItemsRcs       = Localizer.Format("#MechJeb_InfoItems_rcs");
+            MechJebInfoItemsEngine    = Localizer.Format("#MechJeb_InfoItems_engine");
 
             MechJebNavBallGuidanceBtn1 = Localizer.Format("#MechJeb_NavBallGuidance_btn1");
             MechJebNavBallGuidanceBtn2 = Localizer.Format("#MechJeb_NavBallGuidance_btn2");

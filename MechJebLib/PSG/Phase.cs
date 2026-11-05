@@ -41,11 +41,11 @@ namespace MechJebLib.PSG
         // mdot of phase (0 for coast)
         public double Mdot;
 
-        // minimum supported throttle
+        // the optimizer's throttle floor: the engine minimum clamped up to AscentProblem.CLAMPED_MINTHROTTLE (0 for coast)
         public double MinThrottle;
 
         // assigned in the solution for a stage which needs a precise shutdown.
-        // (AllowShutdown stages which the optimizer burns to completion do not get this tag)
+        // (AllowShutdown stages which the optimizer burns to completion do not get this tag, and coasts never do)
         public bool PreciseShutdown;
 
         // assigned in the solution for the 'top' of the rocket.
@@ -174,11 +174,11 @@ namespace MechJebLib.PSG
             phase.Set(m0, thrust, isp, mf, bt, kspStage, mjPhase, ispCurrent);
 
             phase.AllowShutdown = allowShutdown;
+            phase.MinThrottle = Clamp(minThrottle, AscentProblem.CLAMPED_MINTHROTTLE, 1.0);
             phase.MinT = allowShutdown ? 0 : bt;
-            phase.MaxT = bt / minThrottle;
+            phase.MaxT = bt / phase.MinThrottle;
             phase.Unguided = unguided;
             phase.MassContinuity = massContinuity;
-            phase.MinThrottle = Clamp(minThrottle, 0.05, 1.0);
 
             return phase;
         }

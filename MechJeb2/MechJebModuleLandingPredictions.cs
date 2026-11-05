@@ -109,6 +109,7 @@ namespace MuMech
 
         public IDescentSpeedPolicy descentSpeedPolicy = null; //simulate this descent speed policy
         public double parachuteSemiDeployMultiplier = 3; // this will get updated by the autopilot.
+        public int dropStage = -1; // this will get updated by the autopilot: predict what's left after this stage
         public bool runErrorSimulations = false; // This will be set by the autopilot to turn error simulations on or off.
 
         //internal data:
@@ -177,6 +178,23 @@ namespace MuMech
 
             errorStopwatch.Stop();
             errorStopwatch.Reset();
+
+            ClearResults();
+        }
+
+        // a result from before the predictor was disabled says nothing about the vessel when it is enabled again
+        private void ClearResults()
+        {
+            lock (readyResults)
+            {
+                while (readyResults.Count > 0)
+                    ((ReentrySimulation.Result)readyResults.Dequeue()).Release();
+
+                result?.Release();
+                result = null;
+                errorResult?.Release();
+                errorResult = null;
+            }
         }
 
         public override void OnFixedUpdate()
@@ -276,9 +294,9 @@ namespace MuMech
             //if (descentSpeedPolicy != null)
             //    print(vesselState.limitedMaxThrustAccel.ToString("F2") + " " + descentSpeedPolicy.MaxAllowedSpeed(vesselState.CoM - mainBody.position, vesselState.surfaceVelocity).ToString("F2"));
 
-            var simVessel = SimulatedVessel.Borrow(Vessel, simCurves, patch.StartUT, Core.Landing.Enabled && deployChutes ? limitChutesStage : -1);
+            var simVessel = SimulatedVessel.Borrow(Vessel, simCurves, patch.StartUT, Core.Landing.Enabled && deployChutes ? limitChutesStage : -1, dropStage);
             var sim = ReentrySimulation.Borrow(patch, patch.StartUT, simVessel, simCurves, descentSpeedPolicy, decelEndAltitudeASL,
-                VesselState.LimitedMaxThrustAcceleration, parachuteMultiplierForThisSimulation, altitudeOfPreviousPrediction, addParachuteError, dt,
+                dropStage >= 0 ? 0 : VesselState.LimitedMaxThrustAcceleration, parachuteMultiplierForThisSimulation, altitudeOfPreviousPrediction, addParachuteError, dt,
                 Time.fixedDeltaTime, maxOrbits, noSkipToFreefall);
             //MechJebCore.print("Sim ran with dt=" + dt.ToString("F3"));
 
@@ -317,7 +335,7 @@ namespace MuMech
                     errorStopwatch.Reset();
 
                     //set the delay before the next simulation
-                    millisecondsBetweenErrorSimulations = Math.Min(Math.Max(4 * millisecondsToCompletion, 400), 5);
+                    millisecondsBetweenErrorSimulations = Math.Max(Math.Min(4 * millisecondsToCompletion, 2000), 400);
                     // Note that we are going to run the simulations with error in less often that the real simulations
 
                     //start the stopwatch that will count off this delay
@@ -332,7 +350,7 @@ namespace MuMech
                     stopwatch.Reset();
 
                     //set the delay before the next simulation
-                    millisecondsBetweenSimulations = Math.Min(Math.Max(2 * millisecondsToCompletion, 200), 5);
+                    millisecondsBetweenSimulations = Math.Max(Math.Min(2 * millisecondsToCompletion, 1000), 200);
                     lastSimTime = millisecondsToCompletion * 0.001;
                     lastSimSteps = newResult.Steps;
                     // Do not wait for too long before running another simulation, but also give the processor a rest.

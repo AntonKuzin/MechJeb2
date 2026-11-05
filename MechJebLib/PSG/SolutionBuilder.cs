@@ -5,6 +5,7 @@
 
 using MechJebLib.Interpolants;
 using MechJebLib.Primitives;
+using MechJebLib.Utils;
 using static System.Math;
 
 namespace MechJebLib.PSG
@@ -15,13 +16,15 @@ namespace MechJebLib.PSG
         private readonly VariableProxy _vars;
         private readonly Problem _problem;
         private readonly PhaseCollection _phases;
+        private readonly AscentProblem _ascentProblem;
 
-        public SolutionBuilder(int n, VariableProxy vars, Problem problem, PhaseCollection phases)
+        public SolutionBuilder(int n, VariableProxy vars, Problem problem, PhaseCollection phases, AscentProblem ascentProblem)
         {
             _n = n;
             _vars = vars;
             _problem = problem;
             _phases = phases.DeepCopy();
+            _ascentProblem = ascentProblem;
             AnalyzeStages();
         }
 
@@ -45,7 +48,9 @@ namespace MechJebLib.PSG
                 // is this is a prunable stage (negligible propellant use after we can prune)
                 bool prunableStage = pruningStages && bt < 1e-3;
 
-                if (phase.AllowShutdown && !prunableStage)
+                // coasts are AllowShutdown, but there's no engine to shut down precisely, so they must not take the flag
+                // from the burn before them
+                if (phase.AllowShutdown && !phase.Coast && !prunableStage)
                     optimizedShutdownIndex = p;
 
                 phase.PreciseShutdown = false;
@@ -63,8 +68,8 @@ namespace MechJebLib.PSG
             if (optimizedShutdownIndex >= 0)
                 _phases[optimizedShutdownIndex].PreciseShutdown = true;
 
-            if (terminalStageIndex >= 0)
-                _phases[terminalStageIndex].TerminalStage = true;
+            Check.True(terminalStageIndex >= 0, "no terminal stage found");
+            _phases[terminalStageIndex].TerminalStage = true;
         }
 
         public Solution Build()
@@ -72,6 +77,12 @@ namespace MechJebLib.PSG
             var solution = new Solution(_problem);
 
             double ti = 0;
+
+            // scratch buffers, CubicHermiteVecNode.Rent copies out of them so they can be reused for every node
+            using var y0 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
+            using var dy0 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
+            using var y1 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
+            using var dy1 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
 
             for (int p = 0; p < _phases.Count; p++)
             {
@@ -87,7 +98,7 @@ namespace MechJebLib.PSG
                     double t1 = ti + (n + _tau[1]) * h;
                     double t2 = ti + (n + _tau[2]) * h;
                     double t3 = ti + (n + 1) * h;
-                    (Vec y0, Vec dy0, Vec y1, Vec dy1) = InterpolantValues(n, h, p);
+                    InterpolantValues(n, h, p, y0, dy0, y1, dy1);
                     interpolant.Append(CubicHermiteVecNode.Rent(t1, t2 - t1, y0, dy0, y1, dy1), t0, t3);
                 }
 
@@ -101,17 +112,12 @@ namespace MechJebLib.PSG
             return solution;
         }
 
-        private (Vec y0, Vec dy0, Vec y1, Vec dy1) InterpolantValues(int n, double h, int p)
+        private void InterpolantValues(int n, double h, int p, Vec y0, Vec dy0, Vec y1, Vec dy1)
         {
             Phase phase = _phases[p];
             PhaseProxy thisPhase = _vars[p];
 
             int k = 3 * n;
-
-            var y0 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
-            var dy0 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
-            var y1 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
-            var dy1 = Vec.Rent(InterpolantLayout.INTERPOLANT_LAYOUT_LEN);
 
             var y0Layout = new InterpolantLayout { R = thisPhase.R[k + 1], V = thisPhase.V[k + 1], M = phase.Coast ? thisPhase.M.First : thisPhase.M[k + 1] };
             var y1Layout = new InterpolantLayout { R = thisPhase.R[k + 2], V = thisPhase.V[k + 2], M = phase.Coast ? thisPhase.M.First : thisPhase.M[k + 2] };
@@ -169,7 +175,7 @@ namespace MechJebLib.PSG
             var dy0Layout = new InterpolantLayout
             {
                 R = thisPhase.V[k + 1],
-                V = VDot(y0Layout, _problem, phase),
+                V = VDot(phase, y0Layout),
                 M = -phase.Mdot * y0Layout.T,
                 U = dy0U,
                 T = dyT
@@ -177,7 +183,7 @@ namespace MechJebLib.PSG
             var dy1Layout = new InterpolantLayout
             {
                 R = thisPhase.V[k + 2],
-                V = VDot(y1Layout, _problem, phase),
+                V = VDot(phase, y1Layout),
                 M = -phase.Mdot * y1Layout.T,
                 U = dy1U,
                 T = dyT
@@ -187,49 +193,9 @@ namespace MechJebLib.PSG
             dy0Layout.CopyTo(dy0);
             y1Layout.CopyTo(y1);
             dy1Layout.CopyTo(dy1);
-
-            return (y0, dy0, y1, dy1);
         }
 
-        //TODO: this duplicates code with AscentProblem
-
-        private static V3 VDot(InterpolantLayout d, Problem problem, Phase phase)
-        {
-            double rho0CdAref = problem.Rho0CdAref;
-            double h0 = problem.H0;
-
-            return h0 > 0 && rho0CdAref > 0 ? VDotAtmo(d, problem, phase) : VDotVacuum(d, phase);
-        }
-
-        private static V3 VDotVacuum(InterpolantLayout d, Phase phase)
-        {
-            double vacThrust = phase.VacThrust;
-
-            double r3 = d.R.sqrMagnitude * d.R.magnitude;
-            return -d.R / r3 + vacThrust / d.M * d.U * d.T;
-        }
-
-        private static V3 VDotAtmo(InterpolantLayout d, Problem problem, Phase phase)
-        {
-            double rho0CdAref = problem.Rho0CdAref;
-            double rBody = problem.RBody;
-            double h0 = problem.H0;
-            double r0 = problem.R0.magnitude;
-            V3 w = problem.W;
-
-            double mdot = phase.Mdot;
-            double vexCurrent = phase.VexCurrent;
-            double vexVacuum = phase.VexVacuum;
-
-            double r = d.R.magnitude;
-            double r3 = d.R.sqrMagnitude * r;
-            V3 vr = d.V - V3.Cross(w, d.R);
-            double normAtmosphere = Exp(-(r - rBody) / h0);
-            double normAtmosphere2 = Exp(-(r - r0) / h0);
-            V3 drag = 0.5 * rho0CdAref * normAtmosphere * vr.sqrMagnitude * vr.normalized;
-            //T = ṁ [v_e_sl + (v_e_vac - v_e_sl)(1 - p_amb/p₀)]
-            double thrust = mdot * (vexCurrent + (vexVacuum - vexCurrent) * (1.0 - normAtmosphere2));
-            return -d.R / r3 + thrust / d.M * d.U * d.T - drag / d.M;
-        }
+        // The NLP's dynamics evaluated with constant duals (the discarded derivative work is negligible here).
+        private V3 VDot(Phase phase, InterpolantLayout d) => _ascentProblem.VDot(phase, d.R, d.V, d.M, d.U, d.T).M;
     }
 }

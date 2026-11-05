@@ -7,12 +7,12 @@ namespace MuMech.UI
     /// <summary>
     /// MechJebModuleWarpHelper ("Warp Helper") in KodeKit, row for row with its WindowGUI.
     /// </summary>
-    [KodeViewFor(typeof(MechJebModuleWarpHelper))]
+    [KodeViewFor(typeof(MechJebModuleWarpHelperWindow))]
     public class WarpHelperView : KodeView
     {
         readonly MechJebModuleWarpHelper helper;
 
-        public WarpHelperView(MechJebModuleWarpHelper helper) : base(helper) => this.helper = helper;
+        public WarpHelperView(MechJebModuleWarpHelperWindow window) : base(window) => helper = window.Helper;
 
         protected override float MinWidth => 240;
 
@@ -60,7 +60,7 @@ namespace MuMech.UI
             Layout phase = KodeWindow.Row(r);
             KodeWindow.Label(phase, "#MechJeb_WarpHelper_label4"); //"Phase Angle:"
             EditUi.Field(w, phase, () => helper.phaseAngle, 60);
-            KodeWindow.Label(phase, "º");
+            KodeWindow.Label(phase, "°");
             w.Visible(phase.gameObject, () => helper.warpTarget == MechJebModuleWarpHelper.WarpTarget.PhaseAngleT && TargetExists());
 
             Layout lead = KodeWindow.Row(r);

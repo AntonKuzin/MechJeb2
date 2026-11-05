@@ -25,7 +25,7 @@ namespace MuMech.UI
 
         MechJebCore Core => guidance.Core;
         MechJebModuleDockingAutopilot Ap => autopilot ??= Core.GetComputerModule<MechJebModuleDockingAutopilot>();
-        bool HasTarget => Core.Target != null && Core.Target.NormalTargetExists;
+        bool HasTarget => Core.Target != null && Core.Target.NormalTargetExists && Core.Target.Target.GetVessel() != null;
         bool ApEnabled => Ap != null && Ap.Enabled;
 
         // state refreshed by BeforeSync
@@ -63,8 +63,9 @@ namespace MuMech.UI
                 if (ap.overridenTargetSize < 10)
                     ap.overridenTargetSize = 10;
 
+                // 0 means no limit, so a negative value must not fall to 0
                 if (ap.speedLimit < 0)
-                    ap.speedLimit = 0;
+                    ap.speedLimit = 0.1;
 
                 if (ap.Enabled)
                 {
@@ -102,7 +103,7 @@ namespace MuMech.UI
             TargetPortSelector(w, main);
 
             UIText warnTarget = GuidanceUi.Warning(w, main, "#MechJeb_Docking_label3");
-            w.Visible(warnTarget.gameObject, () => !(Core.Target.Target is ModuleDockingNode) && guidance.selectedTargetPort == null);
+            w.Visible(warnTarget.gameObject, () => !(Core.Target.Target is ModuleDockingNode));
 
             UIText warnAxis = GuidanceUi.Warning(w, main, "#MechJeb_Docking_label4");
             w.Visible(warnAxis.gameObject, () => noOnAxisNode);
@@ -123,6 +124,11 @@ namespace MuMech.UI
             });
             Layout start = EditRow(w, main, "#MechJeb_Docking_label6", () => Ap?.overridenTargetSize, "m"); //"Start Distance"
             w.Visible(start.gameObject, () => Ap != null && Ap.overrideTargetSize);
+
+            w.Toggle(main, "#MechJeb_Docking_checkbox7", () => Ap != null && Ap.stopOnContact, v => //"Stop on contact"
+            {
+                if (Ap != null) Ap.stopOnContact = v;
+            });
 
             w.Toggle(main, "#MechJeb_Docking_checkbox5", () => Ap != null && Ap.drawBoundingBox, v => //"Draw Bounding Box"
             {
@@ -155,7 +161,7 @@ namespace MuMech.UI
 
             Layout main = TargetGate(w, r);
 
-            bool NoTargetPort() => !(Core.Target.Target is ModuleDockingNode) && guidance.selectedTargetPort == null;
+            bool NoTargetPort() => !(Core.Target.Target is ModuleDockingNode);
             Layout problems = w.StatusBar(main, () => KodeWindow.Tone.Warn);
             w.Visible(problems.gameObject, () => noDockingPortControl || noOnAxisNode || NoTargetPort());
             w.Visible(GuidanceUi.Wrapped(problems, "#MechJeb_Docking_label2").gameObject, () => noDockingPortControl);
@@ -180,6 +186,10 @@ namespace MuMech.UI
             });
             Layout start = GridField(g, "#MechJeb_Docking_label6", () => Ap?.overridenTargetSize, "m"); //"Start Distance"
             g.Dim(start.gameObject, null, () => Ap == null || !Ap.overrideTargetSize);
+            g.Switch("#MechJeb_Docking_checkbox7", () => Ap != null && Ap.stopOnContact, v => //"Stop on contact"
+            {
+                if (Ap != null) Ap.stopOnContact = v;
+            });
             g.Switch("#MechJeb_Docking_checkbox6", () => Ap != null && Ap.forceRol, v => //"Force Roll :"
             {
                 if (Ap != null) Ap.forceRol = v;

@@ -65,7 +65,7 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_HoverslamBiome", InfoItem.Category.Hoverslam, tooltip = "#MechJeb_HoverslamBiome_tooltip")] //Biome
         public string Biome() => IsFinite(LandingUT) ? MainBody.GetExperimentBiomeSafe(Lat, Lng) : "N/A";
 
-        [ValueInfoItem("#MechJeb_HoverslamSlope", InfoItem.Category.Hoverslam, format = "F2", units = "º", tooltip = "#MechJeb_HoverslamSlope_tooltip")] //Slope
+        [ValueInfoItem("#MechJeb_HoverslamSlope", InfoItem.Category.Hoverslam, format = "F2", units = "°", tooltip = "#MechJeb_HoverslamSlope_tooltip")] //Slope
         public double Slope;
 
         [ValueInfoItem("#MechJeb_HoverslamTerrainAltitude", InfoItem.Category.Hoverslam, format = "F1", units = "m", tooltip = "#MechJeb_HoverslamTerrainAltitude_tooltip")] //Terrain altitude
@@ -231,7 +231,7 @@ namespace MuMech
                 LandingUT = _hoverslam.LandingUT;
                 FinalThrustAccel = _hoverslam.FinalThrustAccel;
                 MainBody.GetLatLngAltAtUT(LandingUT, LandingPosition, out Lat, out Lng, out _);
-                TerrainAltitude = MainBody.TerrainAltitude(Lat, Lng, true);
+                TerrainAltitude = MainBody.TerrainAltitude(Lat, Lng, !MainBody.ocean);
                 Slope = MainBody.GetPQSSlopeDegrees(Lat, Lng);
                 DeltaV = CalculateDeltaV(LandingCountdown - (IgnitionUT < VesselState.Time ? 0 : IgnitionCountdown));
             }

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using KSP.Localization;
+using MechJebLib.Utils;
 using UnityEngine;
 
 namespace MuMech
@@ -38,7 +39,8 @@ namespace MuMech
 
         // Draw the parameter part of the Operation (ask for time, altitudes etc)
         // Input parameters are orbit and time parameters after the last maneuver and current target
-        public abstract void DoParametersGUI(Orbit o, double universalTime, MechJebModuleTargetController target);
+        // MechJeb2.UI has a native panel for each of MechJeb's operations: this draws, in IMGUI, one from another mod
+        public virtual void DoParametersGUI(Orbit o, double universalTime, MechJebModuleTargetController target) { }
 
         // Function called when create node is pressed; input parameters are orbit and time parameters after the last maneuver and current target
         // ManeuverParameters contain a single time and dV describing the node that should be executed
@@ -54,16 +56,33 @@ namespace MuMech
 
                 // PlaceManeuverNode would throw on these, once the planner had started changing the existing nodes
                 ManeuverParameters? bad = nodes?.Find(n => !n.dV.IsFinite() || !n.UT.IsFinite());
-                if (bad == null)
+                if (bad != null)
+                {
+                    Debug.LogError($"[MechJeb] {GetName()} made a bad node: dV {bad.dV} at UT {bad.UT}");
+                    ErrorMessage = Localizer.Format("#MechJeb_Maneu_errorMessage"); //An error occurred while creating the node.
+                    return null;
+                }
+
+                // PlaceManeuverNode would move such a node to now, or the orbit after the last node would be the wrong one for it,
+                // and either way the dV was computed for another point of the orbit. A second of round-off is let through.
+                ManeuverParameters? past = nodes?.Find(n => n.UT < universalTime - 1);
+                if (past == null)
                     return nodes;
 
-                Debug.LogError($"[MechJeb] {GetName()} made a bad node: dV {bad.dV} at UT {bad.UT}");
-                ErrorMessage = Localizer.Format("#MechJeb_Maneu_errorMessage"); //An error occurred while creating the node.
+                Debug.LogWarning($"[MechJeb] {GetName()} made a node at UT {past.UT}, before the start at {universalTime}");
+                ErrorMessage = Localizer.Format("#MechJeb_Maneu_pastNodeError"); //The burn would be before the start of the orbit it is planned on.
                 return null;
             }
             catch (OperationException e)
             {
                 ErrorMessage = e.Message;
+                return null;
+            }
+            catch (ConvergenceException e)
+            {
+                // the solver's own message is for the log; the request itself is what to change
+                Debug.LogWarning($"[MechJeb] {GetName()}: {e.Message}");
+                ErrorMessage = Localizer.Format("#MechJeb_Maneu_convergenceError"); //No maneuver meets these targets; try other values.
                 return null;
             }
             catch (Exception e)

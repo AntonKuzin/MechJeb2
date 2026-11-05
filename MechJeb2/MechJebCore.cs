@@ -63,6 +63,7 @@ namespace MuMech
 
         private Vessel _controlledVessel; //keep track of which vessel we've added our onFlyByWire callback to
         public string version = "";
+        private static string _cachedVersion;
         private bool _deactivateControl;
         private float _currentThrottle; // To maintain throttle when controls deactivated
 
@@ -83,8 +84,8 @@ namespace MuMech
                 MechJebCore mj = vessel.GetMasterMechJeb();
                 if (mj == null) return;
 
-                if (value && !mj._deactivateControl)
-                    _controlledVessel.ctrlState.mainThrottle = _currentThrottle;
+                if (value && !mj._deactivateControl && mj._controlledVessel != null)
+                    mj._controlledVessel.ctrlState.mainThrottle = mj._currentThrottle;
 
                 mj._deactivateControl = value;
             }
@@ -222,7 +223,7 @@ namespace MuMech
 
                 if (moduleTranslatron is { TechLocked: false })
                 {
-                    Thrust.TransKillH = !Thrust.TransKillH;
+                    masterMechJeb.Thrust.TransKillH = !masterMechJeb.Thrust.TransKillH;
                 }
                 else
                 {
@@ -241,6 +242,9 @@ namespace MuMech
         public void OnAscentAPToggleAction(KSPActionParam param)
         {
             MechJebCore masterMechJeb = vessel.GetMasterMechJeb();
+
+            if (masterMechJeb == null)
+                return;
 
             MechJebModuleAscentBaseAutopilot autopilot = masterMechJeb.AscentSettings.AscentAutopilot;
             MechJebModuleAscentMenu ascentMenu = GetComputerModule<MechJebModuleAscentMenu>();
@@ -268,7 +272,7 @@ namespace MuMech
 
             if (moduleTranslatron is { TechLocked: false })
             {
-                if (Thrust.Users.Count > 1 && !Thrust.Users.Contains(moduleTranslatron))
+                if (masterMechJeb.Thrust.Users.Count > 1 && !masterMechJeb.Thrust.Users.Contains(moduleTranslatron))
                     return;
 
                 moduleTranslatron.SetMode(mode);
@@ -292,7 +296,7 @@ namespace MuMech
             MechJebModuleTranslatron moduleTranslatron = masterMechJeb.GetComputerModule<MechJebModuleTranslatron>();
 
             if (moduleTranslatron is { TechLocked: false })
-                Thrust.TransSpdAct = (relative ? Thrust.TransSpdAct : 0) + speed;
+                masterMechJeb.Thrust.TransSpdAct = (relative ? masterMechJeb.Thrust.TransSpdAct : 0) + speed;
             else
                 Debug.LogError("MechJeb couldn't find MechJebModuleTranslatron for translatron control via action group.");
         }
@@ -409,6 +413,7 @@ namespace MuMech
             _unorderedComputerModules.Clear();
             ClearModulesCache();
 
+            if (_controlledVessel != null) _controlledVessel.OnFlyByWire -= OnFlyByWire;
             if (vessel != null) vessel.OnFlyByWire -= OnFlyByWire;
             _controlledVessel = null;
 
@@ -637,12 +642,6 @@ namespace MuMech
 
             Profiler.BeginSample("MechJebCore.Update");
 
-            if (Input.GetKeyDown(KeyCode.V) && (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)))
-            {
-                MechJebModuleCustomWindowEditor windowEditor = GetComputerModule<MechJebModuleCustomWindowEditor>();
-                if (windowEditor != null) windowEditor.CreateWindowFromSharingString(MuUtils.SystemClipboard);
-            }
-
             //periodically save settings in case we quit unexpectedly
             Profiler.BeginSample("MechJebCore.Update.OnSave");
             if (HighLogic.LoadedSceneIsEditor || (vessel != null && vessel.isActiveVessel))
@@ -727,19 +726,24 @@ namespace MuMech
                 }
             }
 
-            var assembly = Assembly.GetExecutingAssembly();
-            var fileVersionInfo = FileVersionInfo.GetVersionInfo(assembly.Location);
+            if (_cachedVersion == null)
+            {
+                var assembly = Assembly.GetExecutingAssembly();
+                var fileVersionInfo = FileVersionInfo.GetVersionInfo(assembly.Location);
 
-            // Mono compiler is stupid and use AssemblyVersion for the AssemblyFileVersion
-            // So we use an other field to store the dev build number ...
-            Attribute[] attributes = Attribute.GetCustomAttributes(assembly, typeof(AssemblyInformationalVersionAttribute));
-            string devVersion = "";
-            if (attributes.Length > 0)
-                devVersion = ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
+                // Mono compiler is stupid and use AssemblyVersion for the AssemblyFileVersion
+                // So we use an other field to store the dev build number ...
+                Attribute[] attributes = Attribute.GetCustomAttributes(assembly, typeof(AssemblyInformationalVersionAttribute));
+                string devVersion = "";
+                if (attributes.Length > 0)
+                    devVersion = ((AssemblyInformationalVersionAttribute)attributes[0]).InformationalVersion;
 
-            version = devVersion == ""
-                ? $"{fileVersionInfo.FileMajorPart}.{fileVersionInfo.FileMinorPart}.{fileVersionInfo.FileBuildPart}"
-                : devVersion;
+                _cachedVersion = devVersion == ""
+                    ? $"{fileVersionInfo.FileMajorPart}.{fileVersionInfo.FileMinorPart}.{fileVersionInfo.FileBuildPart}"
+                    : devVersion;
+            }
+
+            version = _cachedVersion;
 
             if (HighLogic.LoadedSceneIsEditor || HighLogic.LoadedSceneIsFlight)
                 Print("Loading Mechjeb " + version);
@@ -785,6 +789,11 @@ namespace MuMech
             Spinup = GetComputerModule<MechJebModuleSpinupController>();
             Hoverslam = GetComputerModule<MechJebModuleHoverslamSimulation>();
             SmartASS = GetComputerModule<MechJebModuleSmartASS>();
+
+            // a window goes with its logic module when a blacklist removed that one
+            foreach (DisplayModule window in GetComputerModules<DisplayModule>().ToList())
+                if (window.LogicModuleName != null && GetComputerModule(window.LogicModuleName) == null)
+                    RemoveComputerModule(window);
         }
 
         public override void OnLoad(ConfigNode sfsNode)
@@ -830,7 +839,16 @@ namespace MuMech
                 {
                     try
                     {
-                        global = ConfigNode.Load(MuUtils.GetCfgPath("mechjeb_settings_global.cfg"));
+                        ConfigNode loaded = ConfigNode.Load(MuUtils.GetCfgPath("mechjeb_settings_global.cfg"));
+                        if (loaded != null && (loaded.CountNodes > 0 || loaded.CountValues > 0))
+                        {
+                            global = loaded;
+                        }
+                        else
+                        {
+                            // Empty or unreadable file (for example a crash mid-write). A 0-byte file loads as an empty node, not null.
+                            generateDefaultWindows = true;
+                        }
                     }
                     catch (Exception e)
                     {
@@ -849,7 +867,7 @@ namespace MuMech
                 {
                     try
                     {
-                        type = ConfigNode.Load(typePath);
+                        type = ConfigNode.Load(typePath) ?? type;
                     }
                     catch (Exception e)
                     {
@@ -892,6 +910,7 @@ namespace MuMech
                 // Remove any currently loaded custom windows
                 while (GetComputerModule<MechJebModuleCustomInfoWindow>() is { } win)
                 {
+                    win.OnDestroy(); // frees the window's background texture
                     RemoveComputerModule(win);
                 }
 
@@ -907,6 +926,12 @@ namespace MuMech
                         ConfigNode moduleLocal = local.HasNode(moduleTypeName) ? local.GetNode(moduleTypeName) : null;
                         ConfigNode moduleType = type.HasNode(moduleTypeName) ? type.GetNode(moduleTypeName) : null;
                         ConfigNode moduleGlobal = global.HasNode(moduleTypeName) ? global.GetNode(moduleTypeName) : null;
+
+                        // a window split from its logic module: until it saved its own settings, they are in that module's node
+                        string logicName = (module as DisplayModule)?.LogicModuleName;
+                        if (logicName != null && moduleGlobal == null && global.HasNode(logicName))
+                            moduleGlobal = global.GetNode(logicName);
+
                         module.OnLoad(moduleLocal, moduleType, moduleGlobal);
 
                         // R&D gating always comes from the part cfg (and its MM patches), not the saved vessel/craft, so
@@ -914,6 +939,9 @@ namespace MuMech
                         if (_partSettings != null)
                         {
                             ConfigNode partModuleLocal = partLocal != null && partLocal.HasNode(moduleTypeName) ? partLocal.GetNode(moduleTypeName) : null;
+                            // the part cfg and its MM patches gate a split window under its logic module's name
+                            if (partModuleLocal == null && logicName != null && partLocal != null && partLocal.HasNode(logicName))
+                                partModuleLocal = partLocal.GetNode(logicName);
                             module.unlockParts = partModuleLocal?.GetValue("unlockParts") ?? "";
                             module.unlockTechs = partModuleLocal?.GetValue("unlockTechs") ?? "";
                         }
@@ -1017,7 +1045,15 @@ namespace MuMech
                 Profiler.BeginSample("MechJebCore.OnSave.type");
                 if (type != null && vessel != null)
                 {
-                    ConfigNodeWriter.Save(type, MuUtils.GetTypeCfgPath(vessel.vesselName));
+                    // Its own try: a bad type file name must not prevent the global save
+                    try
+                    {
+                        ConfigNodeWriter.Save(type, MuUtils.GetTypeCfgPath(vessel.vesselName));
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError("MechJeb caught exception saving the vessel type settings: " + e);
+                    }
                 }
 
                 Profiler.EndSample();
@@ -1063,6 +1099,11 @@ namespace MuMech
                 {
                     Debug.LogError("MechJeb module " + module.GetType().Name + " threw an exception in OnDestroy: " + e);
                 }
+            }
+
+            if (_controlledVessel != null)
+            {
+                _controlledVessel.OnFlyByWire -= OnFlyByWire;
             }
 
             if (vessel != null)
@@ -1178,11 +1219,20 @@ namespace MuMech
 
         private void OnShowGUI() => ShowGui = true;
 
-        private void OnHideGUI() => ShowGui = false;
+        private void OnHideGUI()
+        {
+            ShowGui = false;
+            if (_weLockedInputs) UnlockControl();
+        }
 
         private void OnGUI()
         {
-            if (!ShowGui || this != vessel.GetMasterMechJeb() || (!FlightGlobals.ready && HighLogic.LoadedSceneIsFlight) || !_ready) return;
+            if (!ShowGui || this != vessel.GetMasterMechJeb() || (!FlightGlobals.ready && HighLogic.LoadedSceneIsFlight) || !_ready)
+            {
+                // we no longer draw, so nothing can release the lock for us
+                if (_weLockedInputs) UnlockControl();
+                return;
+            }
 
             Profiler.BeginSample("MechJebCore.OnGUI");
 
@@ -1218,8 +1268,19 @@ namespace MuMech
 
                 for (int i = 0; i < _postDrawQueue.Count; i++)
                 {
-                    _postDrawQueue[i]();
+                    try
+                    {
+                        _postDrawQueue[i]();
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogException(e);
+                    }
                 }
+            }
+            else if (_weLockedInputs)
+            {
+                UnlockControl();
             }
 
             Profiler.EndSample();

@@ -2,6 +2,7 @@ extern alias JetBrainsAnnotations;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using JetBrainsAnnotations::JetBrains.Annotations;
 using KSP.Localization;
@@ -26,6 +27,17 @@ namespace MuMech
         public float MinSpeed;
         public float MaxSpeed;
         public bool Quicksave;
+
+        // The PQS height query is the costly part of Update: it is cached, and asked again when the spot changes or when the
+        // vessel's distance to the waypoint has halved or doubled since the last query. The distance check is there because the
+        // height is not the same seen from far and near: PQSMod_FlattenArea and PQSMod_MapDecal (KSC, launch sites, anomalies)
+        // only apply when their quad is active.
+        private const double TERRAIN_REFRESH_MIN_DIST = 500;
+        private CelestialBody _terrainBody;
+        private double _terrainLat = double.NaN;
+        private double _terrainLon = double.NaN;
+        private double _terrainDist = double.NaN;
+        private double _terrainAlt;
 
         public CelestialBody Body => Target != null ? Target.mainBody : FlightGlobals.ActiveVessel.mainBody;
 
@@ -62,20 +74,44 @@ namespace MuMech
             Update();
         }
 
+        /// <summary>A copy that shares nothing with the original, for the saved routes.</summary>
+        public MechJebWaypoint Clone() => new MechJebWaypoint(this);
+
+        private MechJebWaypoint(MechJebWaypoint other)
+        {
+            Latitude = other.Latitude;
+            Longitude = other.Longitude;
+            Altitude = other.Altitude;
+            Position = other.Position;
+            Radius = other.Radius;
+            Name = other.Name;
+            Target = other.Target;
+            MinSpeed = other.MinSpeed;
+            MaxSpeed = other.MaxSpeed;
+            Quicksave = other.Quicksave;
+        }
+
         public MechJebWaypoint(ConfigNode node)
         {
-            if (node.HasValue("Latitude")) { double.TryParse(node.GetValue("Latitude"), out Latitude); }
+            // ConfigNode.AddValue writes numbers with the invariant culture, so they are read back with it
+            if (node.HasValue("Latitude"))
+            {
+                double.TryParse(node.GetValue("Latitude"), NumberStyles.Float, CultureInfo.InvariantCulture, out Latitude);
+            }
 
-            if (node.HasValue("Longitude")) { double.TryParse(node.GetValue("Longitude"), out Longitude); }
+            if (node.HasValue("Longitude"))
+            {
+                double.TryParse(node.GetValue("Longitude"), NumberStyles.Float, CultureInfo.InvariantCulture, out Longitude);
+            }
 
             Target = node.HasValue("Target") ? FlightGlobals.Vessels.Find(v => v.id.ToString() == node.GetValue("Target")) : null;
-            if (node.HasValue("Radius")) { float.TryParse(node.GetValue("Radius"), out Radius); }
+            if (node.HasValue("Radius")) { float.TryParse(node.GetValue("Radius"), NumberStyles.Float, CultureInfo.InvariantCulture, out Radius); }
             else { Radius = DEFAULT_RADIUS; }
 
             Name = node.HasValue("Name") ? node.GetValue("Name") : "";
-            if (node.HasValue("MinSpeed")) { float.TryParse(node.GetValue("MinSpeed"), out MinSpeed); }
+            if (node.HasValue("MinSpeed")) { float.TryParse(node.GetValue("MinSpeed"), NumberStyles.Float, CultureInfo.InvariantCulture, out MinSpeed); }
 
-            if (node.HasValue("MaxSpeed")) { float.TryParse(node.GetValue("MaxSpeed"), out MaxSpeed); }
+            if (node.HasValue("MaxSpeed")) { float.TryParse(node.GetValue("MaxSpeed"), NumberStyles.Float, CultureInfo.InvariantCulture, out MaxSpeed); }
 
             if (node.HasValue("Quicksave")) { bool.TryParse(node.GetValue("Quicksave"), out Quicksave); }
 
@@ -90,7 +126,7 @@ namespace MuMech
                 cn.AddValue("Target", Target.id);
             }
 
-            if (Name != "") { cn.AddValue("Name", Name); }
+            if (Name != "") { cn.AddValue("Name", MuUtils.SanitizeConfigText(Name)); }
 
             cn.AddValue("Latitude", Latitude);
             cn.AddValue("Longitude", Longitude);
@@ -109,7 +145,22 @@ namespace MuMech
         {
             if (Target is null)
             {
-                Position = Body.GetWorldSurfacePosition(Latitude, Longitude, Body.TerrainAltitude(Latitude, Longitude));
+                CelestialBody body = Body;
+                bool spotChanged = body != _terrainBody || Latitude != _terrainLat || Longitude != _terrainLon;
+
+                // the world position still changes every tick (body rotation, floating origin), only the height is cached
+                Position = body.GetWorldSurfacePosition(Latitude, Longitude, _terrainAlt);
+                double dist = Math.Max(Vector3d.Distance(Position, FlightGlobals.ActiveVessel.CoM), TERRAIN_REFRESH_MIN_DIST);
+                if (spotChanged || dist < 0.5 * _terrainDist || dist > 2 * _terrainDist)
+                {
+                    _terrainAlt = body.TerrainAltitude(Latitude, Longitude);
+                    _terrainBody = body;
+                    _terrainLat = Latitude;
+                    _terrainLon = Longitude;
+                    Position = body.GetWorldSurfacePosition(Latitude, Longitude, _terrainAlt);
+                    _terrainDist = Math.Max(Vector3d.Distance(Position, FlightGlobals.ActiveVessel.CoM), TERRAIN_REFRESH_MIN_DIST);
+                }
+
                 if (Vector3d.Distance(Position, FlightGlobals.ActiveVessel.CoM) < 200)
                 {
                     Vector3d dir = (Position - Body.position).normalized;
@@ -134,8 +185,6 @@ namespace MuMech
 
             if (MinSpeed > 0 && MaxSpeed > 0 && MinSpeed > MaxSpeed)
                 MinSpeed = MaxSpeed;
-            else if (MinSpeed > 0 && MaxSpeed > 0 && MaxSpeed < MinSpeed)
-                MaxSpeed = MinSpeed;
         }
     }
 
@@ -161,7 +210,7 @@ namespace MuMech
         public ConfigNode ToConfigNode()
         {
             var cn = new ConfigNode("Waypoints");
-            cn.AddValue("Name", Name);
+            cn.AddValue("Name", MuUtils.SanitizeConfigText(Name));
             cn.AddValue("Body", Body.bodyName);
             cn.AddValue("Mode", Mode);
             ForEach(wp => cn.AddNode(wp.ToConfigNode()));
@@ -184,7 +233,7 @@ namespace MuMech
 
         public MechJebWaypointRoute(string name = "", CelestialBody body = null, string mode = "Rover")
         {
-            Name = name;
+            Name = MuUtils.SanitizeConfigText(name);
             Body = body != null ? body : FlightGlobals.currentMainBody;
             Mode = mode;
         }
@@ -218,6 +267,9 @@ namespace MuMech
         public WaypointMode Mode = WaypointMode.ROVER;
         internal MechJebModuleRoverController _ap;
         internal static readonly List<MechJebWaypointRoute> _routes = new List<MechJebWaypointRoute>();
+
+        // routes of a body that is not installed any more, kept as read so that saving does not drop them
+        private static readonly List<ConfigNode> _unresolvedRoutes = new List<ConfigNode>();
 
         [EditableInfoItem("#MechJeb_MohoMapdist", InfoItem.Category.Rover), Persistent(pass = (int)Pass.GLOBAL)]
         // Moho Mapdist
@@ -293,11 +345,7 @@ namespace MuMech
 
         private const string COORD_REG_EX =
             @"^([nsew])?\s*(-?\d+(?:\.\d+)?)(?:[°:\s]+(-?\d+(?:\.\d+)?))?(?:[':\s]+(-?\d+(?:\.\d+)?))?(?:[^nsew]*([nsew])?)?$";
-
-        private Vector2 _scroll;
-        private GUIStyle _styleActive;
-        private GUIStyle _styleInactive;
-        private GUIStyle _styleQuicksave;
+        private static readonly Regex _coordRegex = new Regex(COORD_REG_EX, RegexOptions.IgnoreCase | RegexOptions.Compiled);
         internal string _titleAdd = "";
         internal string _saveName = "";
         internal bool _waitingForPick;
@@ -306,7 +354,6 @@ namespace MuMech
         internal enum Pages { WAYPOINTS, SETTINGS, ROUTES }
 
         private static MechJebRouteRenderer _renderer;
-        private Rect[] _waypointRects = Array.Empty<Rect>();
         internal int _lastIndex = -1;
         internal int _settingPageIndex;
 
@@ -381,10 +428,18 @@ namespace MuMech
             if (wps.HasNode("Waypoints"))
             {
                 _routes.Clear();
+                _unresolvedRoutes.Clear();
                 RoutesVersion++;
                 foreach (ConfigNode cn in wps.GetNodes("Waypoints"))
                 {
-                    _routes.Add(new MechJebWaypointRoute(cn));
+                    var route = new MechJebWaypointRoute(cn);
+                    if (route.Body == null)
+                    {
+                        _unresolvedRoutes.Add(cn);
+                        continue;
+                    }
+
+                    _routes.Add(route);
                 }
 
                 _routes.Sort(SortRoutes);
@@ -402,6 +457,11 @@ namespace MuMech
                 {
                     cn.AddNode(r.ToConfigNode());
                 }
+            }
+
+            foreach (ConfigNode unresolved in _unresolvedRoutes)
+            {
+                cn.AddNode(unresolved);
             }
 
             cn.Save(MuUtils.GetCfgPath("mechjeb_routes.cfg"));
@@ -514,7 +574,7 @@ namespace MuMech
 
             float s = (float)lat;
 
-            return $"{ns} {h}° {m}' {s:F3}\"";
+            return string.Format(CultureInfo.InvariantCulture, "{0} {1}° {2}' {3:F3}\"", ns, h, m, s);
         }
 
         internal static string LonToString(double lon)
@@ -534,12 +594,16 @@ namespace MuMech
 
             float s = (float)lon;
 
-            return $"{ew} {h}° {m}' {s:F3}\"";
+            return string.Format(CultureInfo.InvariantCulture, "{0} {1}° {2}' {3:F3}\"", ew, h, m, s);
         }
 
-        internal static double ParseCoord(string latLon, bool isLongitute = false)
+        /// <summary>Parse a latitude or longitude as the edit fields show it; false (and 0) when the text is not a coordinate.</summary>
+        internal static bool TryParseCoord(string latLon, bool isLongitute, out double value)
         {
-            Match match = new Regex(COORD_REG_EX, RegexOptions.IgnoreCase).Match(latLon);
+            value = 0;
+            Match match = _coordRegex.Match(latLon ?? "");
+            if (!match.Success) return false;
+
             int range = isLongitute ? 180 : 90;
 
             float nsew = 1;
@@ -555,7 +619,7 @@ namespace MuMech
             }
 
             float h = 0;
-            if (match.Groups[2] != null) { float.TryParse(match.Groups[2].Value, out h); }
+            if (!float.TryParse(match.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out h) || float.IsInfinity(h)) return false;
 
             if (h < 0)
             {
@@ -564,18 +628,23 @@ namespace MuMech
             }
 
             float m = 0;
-            if (match.Groups[3] != null) { float.TryParse(match.Groups[3].Value, out m); }
+            if (match.Groups[3].Success && !float.TryParse(match.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out m)) return false;
 
             float s = 0;
-            if (match.Groups[4] != null) { float.TryParse(match.Groups[4].Value, out s); }
+            if (match.Groups[4].Success && !float.TryParse(match.Groups[4].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out s)) return false;
 
             h = (h + m / 60 + s / 3600) * nsew;
+            if (float.IsNaN(h) || float.IsInfinity(h)) return false;
+
+            // the loops below never end on a huge value
+            h %= range * 2;
 
             while (h > range) { h -= range * 2; }
 
             while (h < -range) { h += range * 2; }
 
-            return h;
+            value = h;
+            return true;
         }
 
         private int SortRoutes(MechJebWaypointRoute a, MechJebWaypointRoute b)
@@ -589,15 +658,13 @@ namespace MuMech
             return string.Compare(a.Name, b.Name, true);
         }
 
-        public MechJebWaypoint SelectedWaypoint() => SelIndex > -1 ? _ap.Waypoints[SelIndex] : null;
+        public MechJebWaypoint SelectedWaypoint() => SelIndex > -1 && SelIndex < _ap.Waypoints.Count ? _ap.Waypoints[SelIndex] : null;
 
         public int SelectedWaypointIndex
         {
             get => SelIndex;
             set => SelIndex = value;
         }
-
-        protected override GUILayoutOption[] WindowOptions() => new[] { GuiUtils.LayoutWidth(500), GUILayout.Height(400) };
 
         // ---- logic shared by the IMGUI window below and the uGUI view (MechJeb2.UI) ----
 
@@ -716,16 +783,16 @@ namespace MuMech
             }
         }
 
-        /// <summary>"Remove" the selected waypoint; with Alt, "Clear" all.</summary>
-        internal void RemoveOrClear(bool alt)
+        /// <summary>"Remove" the selected waypoint, or "Clear" all of them.</summary>
+        internal void RemoveOrClear(bool clear)
         {
             if (_ap.Waypoints.Count <= 0) return;
-            if (alt)
+            if (clear)
             {
                 _ap.WaypointIndex = -1;
                 _ap.Waypoints.Clear();
             }
-            else if (SelIndex >= 0)
+            else if (SelIndex >= 0 && SelIndex < _ap.Waypoints.Count)
             {
                 _ap.Waypoints.RemoveAt(SelIndex);
                 if (_ap.WaypointIndex > SelIndex) { _ap.WaypointIndex--; }
@@ -736,57 +803,57 @@ namespace MuMech
             SelIndex = -1;
         }
 
+        /// <summary>Insert a waypoint before index; WaypointIndex keeps naming the same waypoint.</summary>
+        internal void InsertWaypoint(int index, MechJebWaypoint wp)
+        {
+            _ap.Waypoints.Insert(index, wp);
+            if (_ap.WaypointIndex >= index) { _ap.WaypointIndex++; }
+        }
+
+        /// <summary>Move the waypoint at from to the position to; WaypointIndex keeps naming the same waypoint.</summary>
+        internal void MoveWaypoint(int from, int to)
+        {
+            MechJebWaypoint t = _ap.Waypoints[from];
+            _ap.Waypoints.RemoveAt(from);
+            _ap.Waypoints.Insert(to, t);
+            int cur = _ap.WaypointIndex;
+            if (cur == from) { _ap.WaypointIndex = to; }
+            else if (from < cur && cur <= to) { _ap.WaypointIndex--; }
+            else if (to <= cur && cur < from) { _ap.WaypointIndex++; }
+        }
+
         /// <summary>"Up"; with Alt, "Top".</summary>
         internal void MoveUp(bool alt)
         {
             if (!(SelIndex > 0 && SelIndex < _ap.Waypoints.Count && _ap.Waypoints.Count >= 2)) return;
-            if (alt)
-            {
-                MechJebWaypoint t = _ap.Waypoints[SelIndex];
-                _ap.Waypoints.RemoveAt(SelIndex);
-                _ap.Waypoints.Insert(0, t);
-                SelIndex = 0;
-            }
-            else
-            {
-                _ap.Waypoints.Swap(SelIndex, --SelIndex);
-            }
+            int to = alt ? 0 : SelIndex - 1;
+            MoveWaypoint(SelIndex, to);
+            SelIndex = to;
         }
 
         /// <summary>"Down"; with Alt, "Bottom".</summary>
         internal void MoveDown(bool alt)
         {
             if (!(SelIndex >= 0 && SelIndex < _ap.Waypoints.Count - 1 && _ap.Waypoints.Count >= 2)) return;
-            if (alt)
-            {
-                MechJebWaypoint t = _ap.Waypoints[SelIndex];
-                _ap.Waypoints.RemoveAt(SelIndex);
-                _ap.Waypoints.Add(t);
-                SelIndex = _ap.Waypoints.Count - 1;
-            }
-            else
-            {
-                _ap.Waypoints.Swap(SelIndex, ++SelIndex);
-            }
+            int to = alt ? _ap.Waypoints.Count - 1 : SelIndex + 1;
+            MoveWaypoint(SelIndex, to);
+            SelIndex = to;
         }
 
         internal void ShowWaypointsPage()
         {
             _showPage = Pages.WAYPOINTS;
-            _scroll = Vector2.zero;
             _lastIndex = -1;
         }
 
         internal void ShowRoutesPage()
         {
             _showPage = Pages.ROUTES;
-            _scroll = Vector2.zero;
         }
 
         internal void ShowSettingsPage()
         {
             _showPage = Pages.SETTINGS;
-            _scroll = Vector2.zero;
         }
 
         internal void ToggleHelpWindow()
@@ -843,11 +910,12 @@ namespace MuMech
 
         internal void SaveCurrentRoute()
         {
-            if (_saveName != "" && _ap.Waypoints.Count > 0)
+            string saveName = MuUtils.SanitizeConfigText(_saveName);
+            if (saveName != "" && _ap.Waypoints.Count > 0)
             {
-                MechJebWaypointRoute old = _routes.Find(r => r.Name == _saveName && IsShownRoute(r));
-                var wps = new MechJebWaypointRoute(_saveName, Vessel.mainBody);
-                _ap.Waypoints.ForEach(wp => wps.Add(wp));
+                MechJebWaypointRoute old = _routes.Find(r => r.Name == saveName && IsShownRoute(r));
+                var wps = new MechJebWaypointRoute(saveName, Vessel.mainBody);
+                _ap.Waypoints.ForEach(wp => wps.Add(wp.Clone()));
                 if (old == null)
                 {
                     _routes.Add(wps);
@@ -873,9 +941,10 @@ namespace MuMech
                 {
                     _ap.WaypointIndex = -1;
                     _ap.Waypoints.Clear();
+                    SelIndex = -1;
                 }
 
-                bodyRoutes[_saveIndex].ForEach(wp => _ap.Waypoints.Add(wp));
+                bodyRoutes[_saveIndex].ForEach(wp => _ap.Waypoints.Add(wp.Clone()));
             }
         }
 
@@ -892,7 +961,7 @@ namespace MuMech
                     {
                         if (SelIndex > -1 && SelIndex < _ap.Waypoints.Count)
                         {
-                            _ap.Waypoints.Insert(SelIndex, new MechJebWaypoint(Core.Target.GetPositionTargetPosition()));
+                            InsertWaypoint(SelIndex, new MechJebWaypoint(Core.Target.GetPositionTargetPosition()));
                             _tmpRadius = _ap.Waypoints[SelIndex].Radius.ToString();
                             _tmpLat = LatToString(_ap.Waypoints[SelIndex].Latitude);
                             _tmpLon = LonToString(_ap.Waypoints[SelIndex].Longitude);
@@ -922,7 +991,7 @@ namespace MuMech
                         {
                             if (SelIndex > -1 && SelIndex < _ap.Waypoints.Count)
                             {
-                                _ap.Waypoints.Insert(SelIndex, new MechJebWaypoint(mouseCoords.Latitude, mouseCoords.Longitude));
+                                InsertWaypoint(SelIndex, new MechJebWaypoint(mouseCoords.Latitude, mouseCoords.Longitude));
                                 _tmpRadius = _ap.Waypoints[SelIndex].Radius.ToString();
                                 _tmpLat = LatToString(_ap.Waypoints[SelIndex].Latitude);
                                 _tmpLon = LonToString(_ap.Waypoints[SelIndex].Longitude);
@@ -937,327 +1006,6 @@ namespace MuMech
                     }
                 }
             }
-        }
-
-        private void DrawPageWaypoints()
-        {
-            bool alt = GameSettings.MODIFIER_KEY.GetKey();
-            _scroll = GUILayout.BeginScrollView(_scroll);
-            if (_ap.Waypoints.Count > 0)
-            {
-                _waypointRects = new Rect[_ap.Waypoints.Count];
-                GUILayout.BeginVertical();
-                double eta = 0;
-                double dist = 0;
-                for (int i = 0; i < _ap.Waypoints.Count; i++)
-                {
-                    MechJebWaypoint wp = _ap.Waypoints[i];
-                    AccumulateStats(i, wp, ref eta, ref dist, out double maxSpeed, out float minSpeed);
-                    if (i == SelIndex) DrawSelectedMarker();
-
-                    string str =
-                        $"[{i + 1}] - {wp.GetNameWithCoords()} - R: {wp.Radius:F1} m\n       S: {minSpeed:F0} ~ {maxSpeed:F0} - D: {dist.ToSI(-1)}m - ETA: {GuiUtils.TimeToDHMS(eta)}";
-                    GUI.backgroundColor = i == _ap.WaypointIndex ? new Color(0.5f, 1f, 0.5f) : Color.white;
-                    if (GUILayout.Button(str, i == SelIndex ? _styleActive : wp.Quicksave ? _styleQuicksave : _styleInactive))
-                    {
-                        WaypointClicked(i, alt);
-                    }
-
-                    if (Event.current.type == EventType.Repaint)
-                    {
-                        _waypointRects[i] = GUILayoutUtility.GetLastRect();
-                        //if (i == ap.WaypointIndex) { Debug.Log(Event.current.type.ToString() + " - " + waypointRects[i].ToString() + " - " + scroll.ToString()); }
-                    }
-
-                    GUI.backgroundColor = Color.white;
-
-                    if (SelIndex > -1 && SelIndex == i)
-                    {
-                        GUILayout.BeginHorizontal();
-
-                        GUILayout.Label("  Radius: ", GuiUtils.LayoutNoExpandWidth);
-                        _tmpRadius = GUILayout.TextField(_tmpRadius, GuiUtils.LayoutWidth(50));
-                        float.TryParse(_tmpRadius, out wp.Radius);
-                        if (GUILayout.Button("A", GuiUtils.LayoutNoExpandWidth))
-                        {
-                            RadiusToRest(i);
-                        }
-
-                        GUILayout.Label("- Speed: ", GuiUtils.LayoutNoExpandWidth);
-                        _tmpMinSpeed = GUILayout.TextField(_tmpMinSpeed, GuiUtils.LayoutWidth(40));
-                        float.TryParse(_tmpMinSpeed, out wp.MinSpeed);
-                        if (GUILayout.Button("A", GuiUtils.LayoutNoExpandWidth))
-                        {
-                            MinSpeedToRest(i);
-                        }
-
-                        GUILayout.Label(" - ", GuiUtils.LayoutNoExpandWidth);
-                        _tmpMaxSpeed = GUILayout.TextField(_tmpMaxSpeed, GuiUtils.LayoutWidth(40));
-                        float.TryParse(_tmpMaxSpeed, out wp.MaxSpeed);
-                        if (GUILayout.Button("A", GuiUtils.LayoutNoExpandWidth))
-                        {
-                            MaxSpeedToRest(i);
-                        }
-
-                        GUILayout.FlexibleSpace();
-                        if (GUILayout.Button("QS", wp.Quicksave ? _styleQuicksave : _styleInactive, GuiUtils.LayoutNoExpandWidth))
-                        {
-                            ToggleQuicksave(i, alt);
-                        }
-
-                        GUILayout.EndHorizontal();
-
-
-                        GUILayout.BeginHorizontal();
-
-                        GUILayout.Label("Lat ", GuiUtils.LayoutNoExpandWidth);
-                        _tmpLat = GUILayout.TextField(_tmpLat, GuiUtils.LayoutWidth(125));
-                        wp.Latitude = ParseCoord(_tmpLat);
-
-                        GUILayout.Label(" -  Lon ", GuiUtils.LayoutNoExpandWidth);
-                        _tmpLon = GUILayout.TextField(_tmpLon, GuiUtils.LayoutWidth(125));
-                        wp.Longitude = ParseCoord(_tmpLon, true);
-
-                        GUILayout.EndHorizontal();
-                    }
-                }
-
-                _titleAdd = "Distance: " + dist.ToSI(-1) + "m - ETA: " + GuiUtils.TimeToDHMS(eta);
-                GUILayout.EndVertical();
-            }
-            else
-            {
-                _titleAdd = "";
-            }
-
-            GUILayout.EndScrollView();
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button(alt ? "Reverse" : !_waitingForPick ? "Add Waypoint" : "Abort Adding", GuiUtils.LayoutWidth(110)))
-            {
-                AddOrReverse(alt);
-            }
-
-            if (GUILayout.Button(alt ? "Clear" : "Remove", GuiUtils.LayoutWidth(65)))
-            {
-                RemoveOrClear(alt);
-            }
-
-            if (GUILayout.Button(alt ? "Top" : "Up", GuiUtils.LayoutWidth(57)))
-            {
-                MoveUp(alt);
-            }
-
-            if (GUILayout.Button(alt ? "Bottom" : "Down", GuiUtils.LayoutWidth(57)))
-            {
-                MoveDown(alt);
-            }
-
-            if (GUILayout.Button("Routes"))
-            {
-                ShowRoutesPage();
-            }
-
-            if (GUILayout.Button("Settings"))
-            {
-                ShowSettingsPage();
-            }
-
-            GUILayout.EndHorizontal();
-
-            if (SelIndex >= _ap.Waypoints.Count) { SelIndex = -1; }
-
-            if (SelIndex == -1 && _ap.WaypointIndex > -1 && _lastIndex != _ap.WaypointIndex && _waypointRects.Length > 0)
-            {
-                _scroll.y = _waypointRects[_ap.WaypointIndex].y - 160;
-            }
-
-            _lastIndex = _ap.WaypointIndex;
-        }
-
-        private void DrawPageSettings()
-        {
-            SettingsPageTick();
-            MechJebModuleCustomWindowEditor ed = Core.GetComputerModule<MechJebModuleCustomWindowEditor>();
-
-            _scroll = GUILayout.BeginScrollView(_scroll);
-
-            _settingPageIndex = GUILayout.SelectionGrid(_settingPageIndex, _settingPages, _settingPages.Length);
-
-            switch (_settingPageIndex)
-            {
-                case 0:
-                    GUILayout.BeginHorizontal();
-
-                    GUILayout.BeginVertical();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.hPIDp").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.hPIDi").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.hPIDd").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.terrainLookAhead").DrawItem();
-                    //					ed.registry.Find(i => i.id == "Value:RoverController.speedIntAcc").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.tractionLimit").DrawItem();
-                    ed.registry.Find(i => i.id == "Toggle:RoverController.LimitAcceleration").DrawItem();
-                    GUILayout.EndVertical();
-
-                    GUILayout.BeginVertical();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.sPIDp").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.sPIDi").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.sPIDd").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:RoverController.turnSpeed").DrawItem();
-                    ed.registry.Find(i => i.id == "Value:RoverController.traction").DrawItem();
-                    GUILayout.EndVertical();
-
-                    GUILayout.EndHorizontal();
-                    break;
-
-                case 1:
-                    GUILayout.BeginHorizontal();
-
-                    GUILayout.BeginVertical();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.MohoMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.EveMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.GillyMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.KerbinMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.MunMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.MinmusMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.DunaMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.IkeMapdist").DrawItem();
-                    GUILayout.EndVertical();
-
-                    GUILayout.BeginVertical();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.DresMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.JoolMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.LaytheMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.VallMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.TyloMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.BopMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.PolMapdist").DrawItem();
-                    ed.registry.Find(i => i.id == "Editable:WaypointWindow.EelooMapdist").DrawItem();
-                    GUILayout.EndVertical();
-
-                    GUILayout.EndHorizontal();
-                    break;
-            }
-
-            GUILayout.EndScrollView();
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Waypoints"))
-            {
-                ShowWaypointsPage();
-            }
-
-            if (GUILayout.Button("Routes"))
-            {
-                ShowRoutesPage();
-            }
-
-            if (GUILayout.Button("Help"))
-            {
-                ToggleHelpWindow();
-            }
-
-            GUILayout.EndHorizontal();
-        }
-
-        private void DrawPageRoutes()
-        {
-            bool alt = GameSettings.MODIFIER_KEY.GetKey();
-            _titleAdd = "Routes for " + Vessel.mainBody.bodyName;
-
-            _scroll = GUILayout.BeginScrollView(_scroll);
-            List<MechJebWaypointRoute> bodyWPs = BodyRoutes();
-            for (int i = 0; i < bodyWPs.Count; i++)
-            {
-                GUILayout.BeginHorizontal();
-                string str = bodyWPs[i].Name + " - " + bodyWPs[i].Stats;
-                if (GUILayout.Button(str, i == _saveIndex ? _styleActive : _styleInactive))
-                {
-                    RouteClicked(i);
-                }
-
-                if (i == _saveIndex)
-                {
-                    if (GUILayout.Button("Delete", GuiUtils.LayoutWidth(70)))
-                    {
-                        DeleteRoute(bodyWPs[i].Name);
-                    }
-                }
-
-                GUILayout.EndHorizontal();
-            }
-
-            GUILayout.EndScrollView();
-
-            GUILayout.BeginHorizontal();
-            _saveName = GUILayout.TextField(_saveName, GuiUtils.LayoutWidth(150));
-            if (GUILayout.Button("Save", GuiUtils.LayoutWidth(50)))
-            {
-                SaveCurrentRoute();
-            }
-
-            if (GUILayout.Button(alt ? "Add" : "Load", GuiUtils.LayoutWidth(50)))
-            {
-                LoadSelectedRoute(alt);
-            }
-
-            if (GUILayout.Button("Waypoints"))
-            {
-                ShowWaypointsPage();
-            }
-
-            if (GUILayout.Button("Settings"))
-            {
-                ShowSettingsPage();
-            }
-
-            GUILayout.EndHorizontal();
-        }
-
-        protected override void WindowGUI(int windowID)
-        {
-            if (GUI.Button(new Rect(WindowPos.width - 48, 0, 13, 20), "?", GuiUtils.YellowOnHover))
-            {
-                OpenPageHelp();
-            }
-
-            _styleInactive ??= new GUIStyle(GuiUtils.Skin != null ? GuiUtils.Skin.button : GuiUtils.DefaultSkin.button) { alignment = TextAnchor.UpperLeft };
-
-            if (_styleActive == null)
-            {
-                _styleActive = new GUIStyle(_styleInactive);
-                _styleActive.active.textColor =
-                    _styleActive.focused.textColor = _styleActive.hover.textColor = _styleActive.normal.textColor = Color.green;
-            } // for some reason MJ's skin sometimes isn't loaded at OnStart so this has to be done here
-
-            if (_styleQuicksave == null)
-            {
-                _styleQuicksave = new GUIStyle(_styleActive);
-                _styleQuicksave.active.textColor = _styleQuicksave.focused.textColor =
-                    _styleQuicksave.hover.textColor = _styleQuicksave.normal.textColor = Color.yellow;
-            }
-
-            bool alt = GameSettings.MODIFIER_KEY.GetKey();
-
-            switch (_showPage)
-            {
-                case Pages.WAYPOINTS:
-                    DrawPageWaypoints();
-                    break;
-                case Pages.SETTINGS:
-                    DrawPageSettings();
-                    break;
-                case Pages.ROUTES:
-                    DrawPageRoutes();
-                    break;
-            }
-
-            if (Event.current.type == EventType.Repaint)
-            {
-                ProcessWaypointPick(alt);
-            }
-
-            base.WindowGUI(windowID);
         }
 
         public override void OnFixedUpdate()
@@ -1279,29 +1027,11 @@ namespace MuMech
         public int SelTopic;
         public readonly string[] Topics = { "Rover Controller", "Waypoints", "Routes", "Settings" };
         internal string _selSubTopic = "";
-        private GUIStyle _btnActive;
-        private GUIStyle _btnInactive;
 
         internal void ToggleSubTopic(string title)
         {
             _selSubTopic = _selSubTopic != title ? title : "";
             WindowPos = new Rect(WindowPos.x, WindowPos.y, WindowPos.width, 0);
-        }
-
-        private void HelpTopic(string title, string text)
-        {
-            GUILayout.BeginVertical();
-            if (GUILayout.Button(title, _selSubTopic == title ? _btnActive : _btnInactive))
-            {
-                ToggleSubTopic(title);
-            }
-
-            if (_selSubTopic == title)
-            {
-                GUILayout.Label(text);
-            }
-
-            GUILayout.EndVertical();
         }
 
         public MechJebModuleWaypointHelpWindow(MechJebCore core) : base(core) { }
@@ -1353,8 +1083,8 @@ namespace MuMech
                     add("Adding Waypoints", "Adds a new waypoint to the route at the end or before the currently selected waypoint, " +
                         "simply click the terrain or somewhere on the body in Mapview." +
                         "\n\nAlt clicking will reverse the route for easier going back and holding Alt while clicking the terrain or body in Mapview will allow to add more waypoints without having to click the button again.");
-                    add("Removing Waypoints", "Removes the currently selected waypoint." +
-                        "\n\nAlt clicking will remove all waypoints.");
+                    add("Removing Waypoints", "'Remove' removes the currently selected waypoint." +
+                        "\n\n'Clear' removes all waypoints.");
                     add("Reordering Waypoints",
                         "'Up' and 'Down' will move the selected waypoint up or down in the list, Alt clicking will move it to the top or bottom respectively.");
                     add("Waypoint Radius",
@@ -1395,23 +1125,6 @@ namespace MuMech
                         "These values define offsets for the route height in Mapview. Given how weird it's set up it can be that they are too high or too low so I added these for easier adjusting. Saved globally, I think.");
                     break;
             }
-        }
-
-        protected override void WindowGUI(int windowID)
-        {
-            _btnInactive ??= new GUIStyle(GuiUtils.Skin.button) { alignment = TextAnchor.MiddleLeft };
-
-            if (_btnActive == null)
-            {
-                _btnActive = new GUIStyle(_btnInactive);
-                _btnActive.active.textColor = _btnActive.hover.textColor = _btnActive.focused.textColor = _btnActive.normal.textColor = Color.green;
-            }
-
-            SelTopic = GUILayout.SelectionGrid(SelTopic, Topics, Topics.Length);
-
-            HelpContent(Topics[SelTopic], HelpTopic);
-
-            base.WindowGUI(windowID);
         }
     }
 
@@ -1548,7 +1261,7 @@ namespace MuMech
                     _currPath.gameObject.layer = _nextPath.gameObject.layer = MapView.MapIsEnabled ? 9 : 0;
 
                 int sel = AP.Core.GetComputerModule<MechJebModuleWaypointWindow>().SelIndex;
-                _selWp.enabled = sel > -1 && !MapView.MapIsEnabled;
+                _selWp.enabled = sel > -1 && sel < AP.Waypoints.Count && !MapView.MapIsEnabled;
                 if (_selWp.enabled)
                 {
                     float w = Vector3.Distance(FlightCamera.fetch.mainCamera.transform.position, AP.Waypoints[sel].Position) / 600f + 0.1f;

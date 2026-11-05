@@ -23,19 +23,12 @@ namespace MuMech.UI
                 { typeof(KosAttitudeController), (w, p, att) => BuildKos(new Panel<KosAttitudeController>(w, p, att)) },
                 { typeof(HybridController), (w, p, att) => BuildHybrid(new Panel<HybridController>(w, p, att)) },
                 { typeof(BetterController), (w, p, att) => BuildBetter(new Panel<BetterController>(w, p, att)) },
-                { typeof(LQRController), (w, p, att) => BuildLQR(new Panel<LQRController>(w, p, att)) },
             };
 
         // ---- number formatting without allocation (also used by the window's own readouts) ----
 
         // MuUtils.PadPositive(x, "F3") without allocating: a space in front of non-negative numbers
-        internal static void Padded(CharText t, double v, int decimals)
-        {
-            bool negative = double.IsNegativeInfinity(v) ||
-                v < 0 && v > -1e15 && Math.Round(-(decimal)v, decimals, MidpointRounding.AwayFromZero) > 0;
-            if (!negative) t.Append(' ');
-            t.Append(v, decimals);
-        }
+        internal static void Padded(CharText t, double v, int decimals) => t.PadPositive(v, decimals);
 
         // MuUtils.PadPositiveSci(x, "F3"): above 1e6 "G3" (rare, allocates)
         internal static void PaddedSci(CharText t, double v)
@@ -45,16 +38,7 @@ namespace MuMech.UI
         }
 
         // MuUtils.PrettyPrint(vector): "[ x, y, z ]" with F3
-        internal static void Plain(CharText t, Vector3d v)
-        {
-            t.Append('[');
-            Padded(t, v.x, 3);
-            t.Append(", ");
-            Padded(t, v.y, 3);
-            t.Append(", ");
-            Padded(t, v.z, 3);
-            t.Append(" ]");
-        }
+        internal static void Plain(CharText t, Vector3d v) => t.PrettyPrint(v);
 
         // MuUtils.PrettyPrintSci(vector)
         internal static void PlainSci(CharText t, Vector3d v)
@@ -342,10 +326,18 @@ namespace MuMech.UI
             Factor(p, "Ki = pid.Kp / (", c => c._uiKiFactor, " * Math.Sqrt(2) * Tf)");
             Factor(p, "#MechJeb_AttitudeController_PIDFactor1", c => c._uiDeadband, ""); //"Deadband = "
 
+            Factor(p, "#MechJeb_AttitudeController_label11", c => c.KWlimit, "%"); //"Maximum Relative Angular Velocity"
+            p.W.Slider(p.Parent, () => p.C != null ? (float)p.C.KWlimit.Val : 0, v =>
+            {
+                MJAttitudeController c = p.C;
+                if (c != null && Math.Round(Math.Abs(v - c.KWlimit), 3) > 0) c.KWlimit = Math.Round(v, 3);
+            }, 0, 1);
+
             p.Sync(c =>
             {
                 c.ClampFactors();
                 c.ClampDeadband();
+                c.ApplyUiValues();
             });
         }
 
@@ -474,22 +466,6 @@ namespace MuMech.UI
             Cell(row, label, 100, true);
             p.Fld(row, vel, 56);
             p.Fld(row, pos, 56);
-        }
-
-        // ---- LQRController ----
-
-        static void BuildLQR(Panel<LQRController> p)
-        {
-            p.Edit("Smooth Torque", c => c.SmoothTorque, 50);
-            p.Vec("Position", c => c._current);
-            p.Vec("Desired", c => c._desired);
-            p.Vec("Error", c => c._error);
-            p.Vec("Velocity", c => c._velocity);
-            p.Vec("Mass", c => c._mass);
-            p.Vec("Actuation", c => c._actuation);
-            p.Vec("MOI", c => Moi(c._vessel));
-            p.Vec("Control Torque", c => c._controlTorque);
-            p.Vec("Applied Torque", c => c._targetTorque);
         }
     }
 }

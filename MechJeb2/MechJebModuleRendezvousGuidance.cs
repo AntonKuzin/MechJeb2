@@ -1,4 +1,5 @@
 extern alias JetBrainsAnnotations;
+using System.Collections.Generic;
 using System.Linq;
 using KSP.Localization;
 using UnityEngine;
@@ -12,119 +13,26 @@ namespace MuMech
 
         internal readonly EditableDoubleMult phasingOrbitAltitude = new EditableDoubleMult(200000, 1000);
 
-        protected override void WindowGUI(int windowID)
+        private MechJebModuleRendezvousAutopilot Autopilot => Core.GetComputerModule<MechJebModuleRendezvousAutopilot>();
+
+        // Only a warning: the autopilot refuses this, but a player planning by hand may know better.
+        internal bool OnTheGround
         {
-            if (!Core.Target.NormalTargetExists)
+            get
             {
-                GUILayout.Label(Localizer.Format("#MechJeb_RZplan_label1")); //"Select a target to rendezvous with."
-                base.WindowGUI(windowID);
-                return;
+                Vessel target = Core.Target.Target?.GetVessel();
+                return Vessel.LandedOrSplashed || (target != null && target.LandedOrSplashed);
             }
-
-            if (Core.Target.TargetOrbit.referenceBody != Orbit.referenceBody)
-            {
-                GUILayout.Label(Localizer.Format("#MechJeb_RZplan_label2")); //"Rendezvous target must be in the same sphere of influence."
-                base.WindowGUI(windowID);
-                return;
-            }
-
-            GUILayout.BeginVertical();
-
-            //Information readouts:
-
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label3"), Core.Target.Name); //"Rendezvous target"
-
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label4"),
-                Core.Target.TargetOrbit.PeA.ToSI(3) + "m x " + Core.Target.TargetOrbit.ApA.ToSI(3) + "m"); //"Target orbit"
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label5"), Orbit.PeA.ToSI(3) + "m x " + Orbit.ApA.ToSI(3) + "m"); //"Current orbit"
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label6"),
-                Orbit.RelativeInclination(Core.Target.TargetOrbit).ToString("F2") + "º"); //"Relative inclination"
-
-            double closestApproachTime = Orbit.NextClosestApproachTime(Core.Target.TargetOrbit, VesselState.Time);
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label7"),
-                GuiUtils.TimeToDHMS(closestApproachTime - VesselState.Time)); //"Time until closest approach"
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label8"),
-                Orbit.Separation(Core.Target.TargetOrbit, closestApproachTime).ToSI() + "m"); //"Separation at closest approach"
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RZplan_label10"),
-                OrbitalManeuverCalculator.DeltaVToMatchVelocities(Orbit, closestApproachTime, Core.Target.TargetOrbit).magnitude.ToSI() + "m/s"); //"Relative speed at closest approach"
-
-
-            //Maneuver planning buttons:
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button1"))) //"Align Planes"
-                AlignPlanes();
-
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button2"))) //"Establish new orbit at"
-                EstablishNewOrbit();
-
-            phasingOrbitAltitude.Text = GUILayout.TextField(phasingOrbitAltitude.Text, GuiUtils.LayoutWidth(70));
-            GUILayout.Label("km", GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndHorizontal();
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button3"))) //"Intercept with Hohmann transfer"
-                InterceptWithHohmann();
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button4"))) //"Match velocities at closest approach"
-                MatchVelocitiesAtClosestApproach();
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button5"))) //"Get closer"
-                GetCloser();
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button9"))) //Remove ALL nodes
-            {
-                Vessel.RemoveAllManeuverNodes();
-            }
-
-            if (Core.Node != null)
-            {
-                if (Vessel.patchedConicSolver.maneuverNodes.Any() && !Core.Node.Enabled)
-                {
-                    if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button6"))) //"Execute next node"
-                    {
-                        Core.Node.ExecuteOneNode(this);
-                    }
-
-                    if (Vessel.patchedConicSolver.maneuverNodes.Count > 1)
-                    {
-                        if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button7"))) //"Execute all nodes"
-                        {
-                            Core.Node.ExecuteAllNodes(this);
-                        }
-                    }
-                }
-                else if (Core.Node.Enabled)
-                {
-                    if (GUILayout.Button(Localizer.Format("#MechJeb_RZplan_button8"))) //"Abort node execution"
-                    {
-                        Core.Node.Abort();
-                    }
-                }
-
-                GUILayout.BeginHorizontal();
-                Core.Node.Autowarp =
-                    GUILayout.Toggle(Core.Node.Autowarp, Localizer.Format("#MechJeb_RZplan_checkbox"), GuiUtils.LayoutExpandWidth); //"Auto-warp"
-                GUILayout.EndHorizontal();
-            }
-
-            GUILayout.EndVertical();
-
-            base.WindowGUI(windowID);
         }
 
-        // The maneuver planning actions, shared by the IMGUI window and the new UI view.
+        // The maneuver planning actions, called by the view.
 
         internal void AlignPlanes()
         {
-            double UT;
-            Vector3d dV;
-            if (Orbit.AscendingNodeExists(Core.Target.TargetOrbit))
+            if (!OrbitalManeuverCalculator.DeltaVAndTimeToMatchPlanes(Orbit, Core.Target.TargetOrbit, VesselState.Time, out Vector3d dV, out double UT))
             {
-                dV = OrbitalManeuverCalculator.DeltaVAndTimeToMatchPlanesAscending(Orbit, Core.Target.TargetOrbit, VesselState.Time, out UT);
-            }
-            else
-            {
-                dV = OrbitalManeuverCalculator.DeltaVAndTimeToMatchPlanesDescending(Orbit, Core.Target.TargetOrbit, VesselState.Time, out UT);
+                ScreenMessages.PostScreenMessage(Localizer.Format("#MechJeb_RZplan_noNode"), 5);
+                return;
             }
 
             Vessel.RemoveAllManeuverNodes();
@@ -136,60 +44,68 @@ namespace MuMech
             const double leadTime = 30;
             double phasingOrbitRadius = phasingOrbitAltitude + MainBody.Radius;
 
+            if (phasingOrbitRadius >= MainBody.sphereOfInfluence)
+            {
+                ScreenMessages.PostScreenMessage(Localizer.Format("#MechJeb_RZplan_outsideSOI"), 5);
+                return;
+            }
+
+            List<ManeuverParameters> maneuvers = OrbitalManeuverCalculator.ManeuversToCircularOrbit(Orbit, VesselState.Time + leadTime, phasingOrbitRadius);
+            double earliestUT = Autopilot.EarliestBurnUT(maneuvers[0].dV.magnitude);
+            if (maneuvers[0].UT < earliestUT)
+                maneuvers = OrbitalManeuverCalculator.ManeuversToCircularOrbit(Orbit, earliestUT, phasingOrbitRadius);
+
             Vessel.RemoveAllManeuverNodes();
-            if (Orbit.ApR < phasingOrbitRadius)
-            {
-                double UT1 = VesselState.Time + leadTime;
-                Vector3d dV1 = OrbitalManeuverCalculator.DeltaVToChangeApoapsis(Orbit, UT1, phasingOrbitRadius);
-                Vessel.PlaceManeuverNode(Orbit, dV1, UT1);
-                Orbit transferOrbit = Vessel.patchedConicSolver.maneuverNodes[0].nextPatch;
-                double UT2 = transferOrbit.NextApoapsisTime(UT1);
-                Vector3d dV2 = OrbitalManeuverCalculator.DeltaVToCircularize(transferOrbit, UT2);
-                Vessel.PlaceManeuverNode(transferOrbit, dV2, UT2);
-            }
-            else if (Orbit.PeR > phasingOrbitRadius)
-            {
-                double UT1 = VesselState.Time + leadTime;
-                Vector3d dV1 = OrbitalManeuverCalculator.DeltaVToChangePeriapsis(Orbit, UT1, phasingOrbitRadius);
-                Vessel.PlaceManeuverNode(Orbit, dV1, UT1);
-                Orbit transferOrbit = Vessel.patchedConicSolver.maneuverNodes[0].nextPatch;
-                double UT2 = transferOrbit.NextPeriapsisTime(UT1);
-                Vector3d dV2 = OrbitalManeuverCalculator.DeltaVToCircularize(transferOrbit, UT2);
-                Vessel.PlaceManeuverNode(transferOrbit, dV2, UT2);
-            }
-            else
-            {
-                double UT = Orbit.NextTimeOfRadius(VesselState.Time, phasingOrbitRadius);
-                Vector3d dV = OrbitalManeuverCalculator.DeltaVToCircularize(Orbit, UT);
-                Vessel.PlaceManeuverNode(Orbit, dV, UT);
-            }
+            foreach (ManeuverParameters maneuver in maneuvers)
+                Vessel.PlaceManeuverNode(Orbit, maneuver.dV, maneuver.UT);
         }
+
+        // Only a warning: a player can know that an orbit under the highest peak is clear where it goes.
+        internal bool PhasingOrbitIsSafe => MainBody.IsSafeOrbitRadius(phasingOrbitAltitude + MainBody.Radius);
 
         internal void InterceptWithHohmann()
         {
             (Vector3d dV, double UT, _, _) =
                 OrbitalManeuverCalculator.DeltaVAndTimeForHohmannTransfer(Orbit, Core.Target.TargetOrbit, VesselState.Time, coplanar: false);
+
+            double earliestUT = Autopilot.EarliestBurnUT(dV.magnitude);
+            if (UT < earliestUT)
+            {
+                (dV, UT, _, _) = OrbitalManeuverCalculator.DeltaVAndTimeForHohmannTransfer(Orbit, Core.Target.TargetOrbit, earliestUT,
+                    fixedTime: true, coplanar: false);
+            }
+
             Vessel.RemoveAllManeuverNodes();
             Vessel.PlaceManeuverNode(Orbit, dV, UT);
         }
 
         internal void MatchVelocitiesAtClosestApproach()
         {
-            double UT = Orbit.NextClosestApproachTime(Core.Target.TargetOrbit, VesselState.Time);
-            Vector3d dV = OrbitalManeuverCalculator.DeltaVToMatchVelocities(Orbit, UT, Core.Target.TargetOrbit);
+            double closestApproachUT = Orbit.MinimumSeparationTime(Core.Target.TargetOrbit, VesselState.Time);
+            Vector3d dV = OrbitalManeuverCalculator.DeltaVToMatchVelocities(Orbit, closestApproachUT, Core.Target.TargetOrbit);
             Vessel.RemoveAllManeuverNodes();
-            Vessel.PlaceManeuverNode(Orbit, dV, UT);
+
+            // A burn centered on the closest approach would end at it, which can be inside the target. Use the autopilot's stand-off.
+            Vessel.PlaceManeuverNode(Orbit, dV, Autopilot.BurnUTToStopAtDesiredDistance(closestApproachUT));
         }
 
         internal void GetCloser()
         {
-            double UT = VesselState.Time;
-            (Vector3d dV, _) = OrbitalManeuverCalculator.DeltaVToInterceptAtTime(Orbit, UT, Core.Target.TargetOrbit, 100, 10);
+            // the range of the autopilot's close-in phase: from farther away this costs about a tenth of the distance in m/s
+            double distance = Core.Target.Distance;
+            if (distance >= VesselState.Radius / 25)
+            {
+                ScreenMessages.PostScreenMessage(Localizer.Format("#MechJeb_RZplan_tooFar"), 5);
+                return;
+            }
+
+            double closingTime = Autopilot.ClosingTime(distance);
+            (Vector3d dV, _) = OrbitalManeuverCalculator.DeltaVToInterceptAtTime(Orbit, VesselState.Time, Core.Target.TargetOrbit, closingTime, 10);
+            double UT = Autopilot.EarliestBurnUT(dV.magnitude);
+            (dV, _) = OrbitalManeuverCalculator.DeltaVToInterceptAtTime(Orbit, UT, Core.Target.TargetOrbit, closingTime, 10);
             Vessel.RemoveAllManeuverNodes();
             Vessel.PlaceManeuverNode(Orbit, dV, UT);
         }
-
-        protected override GUILayoutOption[] WindowOptions() => new[] { GuiUtils.LayoutWidth(300), GUILayout.Height(150) };
 
         public override string GetName() => Localizer.Format("#MechJeb_RZplan_title"); //"Rendezvous Planner"
 

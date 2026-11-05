@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using JetBrainsAnnotations::JetBrains.Annotations;
+using MechJebLib.Utils;
 using UnityEngine;
 using UnityEngine.Profiling;
 using Object = UnityEngine.Object;
@@ -57,7 +58,8 @@ namespace MuMech
             set
             {
                 TextConfig = value;
-                TextConfig = Regex.Replace(TextConfig, @"[^\d+-.]", ""); //throw away junk characters
+                // throw away junk characters, keeping e/E so scientific notation like "1e6" parses (it used to become "16")
+                TextConfig = Regex.Replace(TextConfig, @"[^\d+,\-.eE]", "");
                 Parsed = TryParseText(TextConfig, out double parsedValue);
                 if (Parsed) ValConfig = parsedValue;
             }
@@ -66,7 +68,7 @@ namespace MuMech
         // parses display text into the stored (multiplied) value
         protected virtual bool TryParseText(string text, out double val)
         {
-            bool parsed = double.TryParse(text, out val);
+            bool parsed = NumberText.TryParseDouble(text, out val);
             val *= _multiplier;
             return parsed;
         }
@@ -137,7 +139,7 @@ namespace MuMech
         }
 
         protected override bool TryParseText(string text, out double val) =>
-            double.TryParse(text, out val) || GuiUtils.TryParseDHMS(text, out val);
+            NumberText.TryParseDouble(text, out val) || GuiUtils.TryParseDHMS(text, out val);
 
         public static implicit operator EditableTime(double x) => new EditableTime(x);
 
@@ -250,19 +252,8 @@ namespace MuMech
             {
                 TextConfig = value;
                 TextConfig = Regex.Replace(TextConfig, @"[^\d-,]", ""); //throw away junk characters
-                Val.Clear();
-
-                // supports "1,2,3" and "1-3"
-                foreach (string x in TextConfig.Split(','))
-                {
-                    string[] y = x.Split('-');
-
-                    if (!int.TryParse(y[0].Trim(), out int start)) continue;
-                    if (!int.TryParse(y[y.Length - 1].Trim(), out int end)) continue;
-
-                    for (int n = start; n <= end; n++)
-                        Val.Add(n);
-                }
+                // supports "1,2,3" and "1-3", a range is limited to NumberText.MAX_RANGE_LENGTH entries
+                NumberText.ParseIntList(TextConfig, Val);
             }
         }
     }
@@ -683,6 +674,10 @@ namespace MuMech
         {
             if (double.IsInfinity(seconds) || double.IsNaN(seconds)) return "Inf";
 
+            // from a thousand years, years with an SI prefix (ISO 80000-3's "a"): "398.6 Ma", not "398597826y 072d 00h 06m 54s"
+            double years = seconds / KSPUtil.dateTimeFormatter.Year;
+            if (Math.Abs(years) >= 1000) return years.ToSI() + "a";
+
             string ret = "";
             bool showSecondsDecimals = decimalPlaces > 0;
 
@@ -691,17 +686,20 @@ namespace MuMech
                 string[] units = { "y", "d", "h", "m", "s" };
                 long[] intervals = { KSPUtil.dateTimeFormatter.Year, KSPUtil.dateTimeFormatter.Day, 3600, 60, 1 };
 
-                if (seconds < 0)
-                {
-                    ret += "-";
-                    seconds *= -1;
-                }
+                bool negative = seconds < 0;
+                seconds = Math.Abs(seconds);
+                // round to the decimals shown before splitting into units: 239.97 s is "4m 00.0s", not "3m 60.0s"
+                if (showSecondsDecimals)
+                    seconds = (double)Math.Round((decimal)seconds, Math.Min(decimalPlaces, 9), MidpointRounding.AwayFromZero);
+                // no "-00.0s" for a value that rounds to zero
+                if (negative && (showSecondsDecimals ? seconds > 0 : seconds >= 1)) ret += "-";
 
                 for (int i = 0; i < units.Length; i++)
                 {
                     long n = (long)(seconds / intervals[i]);
                     bool first = ret.Length < 2;
-                    if (!first || n != 0 || (i == units.Length - 1 && ret == ""))
+                    // the seconds always show when nothing else did, after a "-" too ("-00.5s", not "-")
+                    if (!first || n != 0 || i == units.Length - 1)
                     {
                         if (!first) ret += " ";
 
@@ -757,7 +755,10 @@ namespace MuMech
             double a = (position - from).magnitude;
             double b = (position - to).magnitude;
             double c = Vector3d.Distance(from, to);
-            double ang = Math.Acos((a * a + b * b - c * c) / (2f * a * b));
+            double denominator = 2 * a * b;
+            if (denominator <= 0)
+                return 0;
+            double ang = SafeAcos((a * a + b * b - c * c) / denominator);
             return ang * FlightGlobals.ActiveVessel.mainBody.Radius;
         }
 
@@ -1041,147 +1042,6 @@ namespace MuMech
             int seconds = (int)Math.Floor(3600 * (Math.Abs(angle) - degrees - minutes / 60.0));
 
             return $"{degrees:0}° {minutes:00}' {seconds:00}\"";
-        }
-    }
-
-    public static class ColorPickerHSV
-    {
-        private static Texture2D _displayPicker;
-
-        [UsedImplicitly]
-        public static Color SetColor;
-
-        private static Color _lastSetColor;
-
-        private const int TEXTURE_WIDTH = 240;
-        private const int TEXTURE_HEIGHT = 240;
-
-        private static float _saturationSlider;
-        private static float _alphaSlider;
-        private static Texture2D _saturationTexture;
-
-        private static void Init()
-        {
-            _displayPicker = new Texture2D(TEXTURE_WIDTH, TEXTURE_HEIGHT, TextureFormat.ARGB32, false);
-            for (int i = 0; i < TEXTURE_WIDTH; i++)
-            {
-                for (int j = 0; j < TEXTURE_HEIGHT; j++)
-                {
-                    _displayPicker.SetPixel(i, j, MuUtils.HSVtoRGB(360f / TEXTURE_WIDTH * i, 1.0f / j * TEXTURE_HEIGHT, 1.0f, 1f));
-                }
-            }
-
-            _displayPicker.Apply();
-
-            float v = 0.0F;
-            float diff = 1.0f / TEXTURE_HEIGHT;
-            _saturationTexture = new Texture2D(20, TEXTURE_HEIGHT);
-            for (int i = 0; i < _saturationTexture.width; i++)
-            {
-                for (int j = 0; j < _saturationTexture.height; j++)
-                {
-                    _saturationTexture.SetPixel(i, j, new Color(v, v, v));
-                    v += diff;
-                }
-
-                v = 0.0F;
-            }
-
-            _saturationTexture.Apply();
-        }
-
-        public static void DrawGUI(int positionLeft, int positionTop)
-        {
-            if (!_displayPicker)
-                Init();
-
-            GUI.Box(new Rect(positionLeft - 3, positionTop - 3, TEXTURE_WIDTH + 90, TEXTURE_HEIGHT + 30), "");
-
-            if (GUI.RepeatButton(new Rect(positionLeft, positionTop, TEXTURE_WIDTH, TEXTURE_HEIGHT), _displayPicker))
-            {
-                int a = (int)Input.mousePosition.x;
-                int b = Screen.height - (int)Input.mousePosition.y;
-
-                SetColor = _displayPicker.GetPixel(a - positionLeft, -(b - positionTop));
-                _lastSetColor = SetColor;
-            }
-
-            _saturationSlider = GUI.VerticalSlider(new Rect(positionLeft + TEXTURE_WIDTH + 3, positionTop, 10, TEXTURE_HEIGHT), _saturationSlider, 1,
-                0);
-            SetColor = _lastSetColor + new Color(_saturationSlider, _saturationSlider, _saturationSlider);
-            GUI.Box(new Rect(positionLeft + TEXTURE_WIDTH + 20, positionTop, 20, TEXTURE_HEIGHT), _saturationTexture);
-
-            _alphaSlider = GUI.VerticalSlider(new Rect(positionLeft + TEXTURE_WIDTH + 3 + 10 + 20 + 10, positionTop, 10, TEXTURE_HEIGHT),
-                _alphaSlider, 1,
-                0);
-            SetColor.a = _alphaSlider;
-            GUI.Box(new Rect(positionLeft + TEXTURE_WIDTH + 20 + 10 + 20 + 10, positionTop, 20, TEXTURE_HEIGHT), _saturationTexture);
-        }
-    }
-
-    public static class ColorPickerRGB
-    {
-        private const int TEXTURE_WIDTH = 240;
-        private const int TEXTURE_HEIGHT = 10;
-
-        private static Texture2D _rTexture;
-        private static Texture2D _gTexture;
-        private static Texture2D _bTexture;
-        private static Texture2D _aTexture;
-
-        private static void Init()
-        {
-            _rTexture = new Texture2D(TEXTURE_WIDTH, 1);
-            _gTexture = new Texture2D(TEXTURE_WIDTH, 1);
-            _bTexture = new Texture2D(TEXTURE_WIDTH, 1);
-            _aTexture = new Texture2D(TEXTURE_WIDTH, 1);
-            for (int i = 0; i < TEXTURE_WIDTH; i++)
-            {
-                float v = (float)i / (TEXTURE_WIDTH - 1);
-                _rTexture.SetPixel(i, 0, new Color(v, 0, 0));
-                _gTexture.SetPixel(i, 0, new Color(0, v, 0));
-                _bTexture.SetPixel(i, 0, new Color(0, 0, v));
-                _aTexture.SetPixel(i, 0, new Color(v, v, v));
-            }
-
-            _rTexture.Apply();
-            _gTexture.Apply();
-            _bTexture.Apply();
-            _aTexture.Apply();
-
-            _rTexture.wrapMode = TextureWrapMode.Repeat;
-            _gTexture.wrapMode = TextureWrapMode.Repeat;
-            _bTexture.wrapMode = TextureWrapMode.Repeat;
-            _aTexture.wrapMode = TextureWrapMode.Repeat;
-        }
-
-        public static Color DrawGUI(int positionLeft, int positionTop, Color c)
-        {
-            if (!_rTexture)
-                Init();
-
-            GUI.Box(new Rect(positionLeft - 3, positionTop - 3, TEXTURE_WIDTH + 3, TEXTURE_HEIGHT + 125), "");
-
-            float pos = positionTop + 5;
-            GUI.DrawTextureWithTexCoords(new Rect(positionLeft, pos, TEXTURE_WIDTH, TEXTURE_HEIGHT), _rTexture, new Rect(0, 0, 1, TEXTURE_HEIGHT));
-            c.r = GUI.HorizontalSlider(new Rect(positionLeft, pos + TEXTURE_HEIGHT + 5, TEXTURE_WIDTH, 10), c.r, 0, 1);
-
-            pos += TEXTURE_HEIGHT + 20;
-
-            GUI.DrawTextureWithTexCoords(new Rect(positionLeft, pos, TEXTURE_WIDTH, TEXTURE_HEIGHT), _gTexture, new Rect(0, 0, 1, TEXTURE_HEIGHT));
-            c.g = GUI.HorizontalSlider(new Rect(positionLeft, pos + TEXTURE_HEIGHT + 5, TEXTURE_WIDTH, 10), c.g, 0, 1);
-
-            pos += TEXTURE_HEIGHT + 20;
-
-            GUI.DrawTextureWithTexCoords(new Rect(positionLeft, pos, TEXTURE_WIDTH, TEXTURE_HEIGHT), _bTexture, new Rect(0, 0, 1, TEXTURE_HEIGHT));
-            c.b = GUI.HorizontalSlider(new Rect(positionLeft, pos + TEXTURE_HEIGHT + 5, TEXTURE_WIDTH, 10), c.b, 0, 1);
-
-            pos += TEXTURE_HEIGHT + 20;
-
-            GUI.DrawTextureWithTexCoords(new Rect(positionLeft, pos, TEXTURE_WIDTH, TEXTURE_HEIGHT), _aTexture, new Rect(0, 0, 1, TEXTURE_HEIGHT));
-            c.a = GUI.HorizontalSlider(new Rect(positionLeft, pos + TEXTURE_HEIGHT + 5, TEXTURE_WIDTH, 10), c.a, 0, 1);
-
-            return c;
         }
     }
 }

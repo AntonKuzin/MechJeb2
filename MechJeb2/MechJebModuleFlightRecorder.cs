@@ -1,5 +1,6 @@
 extern alias JetBrainsAnnotations;
 using System;
+using System.Globalization;
 using System.IO;
 using JetBrainsAnnotations::JetBrains.Annotations;
 using static MechJebLib.Utils.Statics;
@@ -107,8 +108,20 @@ namespace MuMech
 
         public int HistoryIdx = -1;
 
-        [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
-        public readonly int HistorySize = 3000;
+        // The most samples History holds (144 bytes each). History starts small and doubles up to it; once full, recording
+        // stops until the next Mark. A larger value takes effect when History next fills up (recording goes on if it had
+        // stopped), a smaller one at the next Mark.
+        [Persistent(pass = (int)Pass.GLOBAL)]
+        public int HistorySize = 3000;
+
+        public const int MIN_HISTORY_SIZE = 100;
+        public const int MAX_HISTORY_SIZE = 99999; // 5 digits: what the window's field shows
+
+        // what History starts with: a vessel left on the pad or flown for a minute needs no more
+        private const int INITIAL_HISTORY_SIZE = 256;
+
+        // HistorySize as edited in the config file can be anything
+        public int MaxHistorySize => Math.Min(Math.Max(HistorySize, MIN_HISTORY_SIZE), MAX_HISTORY_SIZE);
 
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public readonly double Precision = 0.2;
@@ -158,14 +171,14 @@ namespace MuMech
         //Steering losses
         public double SteeringLosses;
 
-        [ValueInfoItem("#MechJeb_PhaseAngleFromMark", InfoItem.Category.Recorder, format = "F2", units = "º")] //Phase angle from mark
+        [ValueInfoItem("#MechJeb_PhaseAngleFromMark", InfoItem.Category.Recorder, format = "F2", units = "°")] //Phase angle from mark
         public double PhaseAngleFromMark()
         {
             // "Phase angle from mark" is the difference between the angle traversed by the vessel, and the angle
             // traversed by a hypothetical vessel that was in a circular orbit for the same time.
 
             // markVector is the position of the mark, as it was at the time the mark was made.
-            CelestialBody markBody = FlightGlobals.Bodies[MarkBodyIndex];
+            CelestialBody markBody = MarkCelestialBody;
             Vector3d markVector = markBody.GetSurfaceNVector(MarkLatitude, MarkLongitude - TimeSinceMark * 360.0 / markBody.rotationPeriod);
             Vector3d vesselVector = VesselState.CoM - markBody.transform.position;
             double traversedAngle = Vector3d.Angle(markVector, vesselVector);
@@ -192,20 +205,23 @@ namespace MuMech
         [UsedImplicitly, Persistent(pass = (int)Pass.LOCAL)]
         public int MarkBodyIndex = 1;
 
+        // A saved index can be out of range after the planet pack changed: use the current body then
+        private CelestialBody MarkCelestialBody =>
+            MarkBodyIndex >= 0 && MarkBodyIndex < FlightGlobals.Bodies.Count ? FlightGlobals.Bodies[MarkBodyIndex] : MainBody;
+
         [ValueInfoItem("#MechJeb_MarkBody", InfoItem.Category.Recorder)] //Mark body
-        public string MarkBody() => FlightGlobals.Bodies[MarkBodyIndex].bodyName;
+        public string MarkBody() => MarkCelestialBody.bodyName;
 
         [ValueInfoItem("#MechJeb_DistanceFromMark", InfoItem.Category.Recorder, format = ValueInfoItem.SI, units = "m")] //Distance from mark
         public double DistanceFromMark() =>
             Vector3d.Distance(VesselState.CoM,
-                FlightGlobals.Bodies[MarkBodyIndex].GetWorldSurfacePosition(MarkLatitude, MarkLongitude, MarkAltitude) -
-                FlightGlobals.Bodies[MarkBodyIndex].position);
+                MarkCelestialBody.GetWorldSurfacePosition(MarkLatitude, MarkLongitude, MarkAltitude) - MarkCelestialBody.position);
 
         [UsedImplicitly, ValueInfoItem("#MechJeb_DownrangeDistance", InfoItem.Category.Recorder, format = ValueInfoItem.SI, units = "m")]
         //Downrange distance
         public double GroundDistanceFromMark()
         {
-            CelestialBody markBody = FlightGlobals.Bodies[MarkBodyIndex];
+            CelestialBody markBody = MarkCelestialBody;
             Vector3d markVector = markBody.GetSurfaceNVector(MarkLatitude, MarkLongitude);
             Vector3d vesselVector = VesselState.CoM - markBody.transform.position;
             return markBody.Radius * Vector3d.Angle(markVector, vesselVector) * UtilMath.Deg2Rad;
@@ -233,6 +249,9 @@ namespace MuMech
                 Maximums[t] = double.MinValue;
             }
 
+            // a lowered HistorySize applies from here
+            if (History.Length > MaxHistorySize)
+                AllocateHistory();
             HistoryIdx = 0;
             Record(HistoryIdx);
         }
@@ -247,15 +266,20 @@ namespace MuMech
 
         public override void OnStart(PartModule.StartState state)
         {
-            if (History.Length != HistorySize)
-                History = new RecordStruct[HistorySize];
             Users.Add(this); //flight recorder should always run.
         }
 
         private double _lastRecordTime;
 
+        // Not in OnStart: only the vessel's master core runs OnFixedUpdate, so the other MechJeb parts of a vessel never
+        // allocate a History they would not use.
+        private void AllocateHistory() => History = new RecordStruct[Math.Min(INITIAL_HISTORY_SIZE, MaxHistorySize)];
+
         public override void OnFixedUpdate()
         {
+            if (History.Length < MIN_HISTORY_SIZE)
+                AllocateHistory();
+
             if (MarkUT == 0) Mark();
 
             TimeSinceMark = VesselState.Time - MarkUT;
@@ -280,6 +304,10 @@ namespace MuMech
             //int oldHistoryIdx = historyIdx;
 
             //historyIdx = Mathf.Min(Mathf.FloorToInt((float)(timeSinceMark / precision)), history.Length - 1);
+
+            // full: grow up to the max
+            if (HistoryIdx >= History.Length - 1 && History.Length < MaxHistorySize)
+                Array.Resize(ref History, Math.Min(History.Length * 2, MaxHistorySize));
 
             if (VesselState.Time >= _lastRecordTime + Precision && HistoryIdx < History.Length - 1)
             {
@@ -351,11 +379,11 @@ namespace MuMech
                 for (int idx = 0; idx <= HistoryIdx; idx++)
                 {
                     RecordStruct r = History[idx];
-                    writer.Write(r[0]);
+                    writer.Write(r[0].ToString(CultureInfo.InvariantCulture));
                     for (int i = 1; i < _typeCount; i++)
                     {
                         writer.Write(',');
-                        writer.Write(r[(RecordType)i]);
+                        writer.Write(r[(RecordType)i].ToString(CultureInfo.InvariantCulture));
                     }
 
                     writer.WriteLine();

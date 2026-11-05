@@ -2,7 +2,8 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
-using KSP.Localization;
+using MechJebLib.Control;
+using MechJebLib.Primitives;
 using MechJebLibBindings;
 using Smooth.Pools;
 using UnityEngine;
@@ -56,6 +57,9 @@ namespace MuMech
 
         private readonly List<ModuleEngines> _engines = new List<ModuleEngines>();
         private readonly List<ModuleGimbal> _gimbals = new List<ModuleGimbal>();
+        private readonly Vector6 _torqueWeightedExponentialResponseDelay6 = new Vector6();
+        private readonly Vector6 _torqueWeightedLinearResponseDelay6 = new Vector6();
+        private readonly Vector6 _torqueReactionSpeed6 = new Vector6();
         private readonly IntakeInfo _iinfo = new IntakeInfo();
         public readonly List<EngineWrapper> EngineWrappers = new List<EngineWrapper>();
 
@@ -89,6 +93,7 @@ namespace MuMech
         //FARCalculateVesselAeroForces(vessel,out farForce,out farTorque,surfaceVelocity,altitudeASL);
         private Vector3 _lastFarForce;
         private Vector3d _lastSurfaceVelocity;
+        private bool _farForceCacheInvalid = true; // set when the vessel changed, the cached force is of another configuration
 
         [ValueInfoItem("#MechJeb_Altitude_ASL", InfoItem.Category.Surface, format = ValueInfoItem.SI, siSigFigs = 6, units = "m")] //Altitude (ASL)
         public double AltitudeASL;
@@ -96,20 +101,20 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_Altitude_true", InfoItem.Category.Surface, format = ValueInfoItem.SI, siSigFigs = 6, units = "m")] //Altitude (true)
         public double AltitudeTrue;
 
-        [ValueInfoItem("#MechJeb_AngleToPrograde", InfoItem.Category.Orbit, format = "F2", units = "º")] //Angle to prograde
+        [ValueInfoItem("#MechJeb_AngleToPrograde", InfoItem.Category.Orbit, format = "F2", units = "°")] //Angle to prograde
         public double AngleToPrograde;
 
         public Vector3d AngularMomentum;
 
         public Vector3d AngularVelocity;
 
-        [ValueInfoItem("#MechJeb_AngleOfAttack", InfoItem.Category.Misc, format = "F2", units = "º")] //Angle of Attack
+        [ValueInfoItem("#MechJeb_AngleOfAttack", InfoItem.Category.Misc, format = "F2", units = "°")] //Angle of Attack
         public double AoA;
 
-        [ValueInfoItem("#MechJeb_DisplacementAngle", InfoItem.Category.Misc, format = "F2", units = "º")] //Displacement Angle
+        [ValueInfoItem("#MechJeb_DisplacementAngle", InfoItem.Category.Misc, format = "F2", units = "°")] //Displacement Angle
         public double AoD;
 
-        [ValueInfoItem("#MechJeb_AngleOfSideslip", InfoItem.Category.Misc, format = "F2", units = "º")] //Angle of Sideslip
+        [ValueInfoItem("#MechJeb_AngleOfSideslip", InfoItem.Category.Misc, format = "F2", units = "°")] //Angle of Sideslip
         public double AoS;
 
         // Product of the drag surface area, drag coefficient and the physics multipliers
@@ -143,8 +148,8 @@ namespace MuMech
         [ValueInfoItem("Drag Acceleration", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "m/s²")] //Drag Acceleration
         public double DragAcceleration; // wind relative drag acceleration
 
-        [ValueInfoItem("Drag Force", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "kN")] //Drag Force
-        public double DragForce; // wind relative drag force
+        [ValueInfoItem("Drag Force", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "N", scale = 1000)] //Drag Force
+        public double DragForce; // wind relative drag force, in kN
 
         [ValueInfoItem("#MechJeb_DragCoefficient", InfoItem.Category.Vessel, format = "F2")] //Drag Coefficient
         public double DragCoefficient;
@@ -160,7 +165,7 @@ namespace MuMech
 
         public Vector3d GravityForce;
 
-        [ValueInfoItem("#MechJeb_Heading", InfoItem.Category.Surface, format = "F1", units = "º")] //Heading
+        [ValueInfoItem("#MechJeb_Heading", InfoItem.Category.Surface, format = "F1", units = "°")] //Heading
         public double Heading;
 
         public Vector3d HorizontalOrbit; //unit vector in the direction of horizontal component of orbit velocity
@@ -186,8 +191,8 @@ namespace MuMech
         [ValueInfoItem("Lift Acceleration", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "m/s²")] //Lift Acceleration
         public double LiftAcceleration; // wind relative Lift acceleration
 
-        [ValueInfoItem("Lift Force", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "kN")] //Lift Force
-        public double LiftForce; // wind relative Lift force
+        [ValueInfoItem("Lift Force", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "N", scale = 1000)] //Lift Force
+        public double LiftForce; // wind relative Lift force, in kN
 
         [ValueInfoItem("#MechJeb_LocalGravity", InfoItem.Category.Misc, format = ValueInfoItem.SI, units = "m/s²")] //Local gravity
         public double LocalGravity; //magnitude of gravityForce
@@ -215,13 +220,13 @@ namespace MuMech
         [ValueInfoItem("#MechJeb_Apoapsis", InfoItem.Category.Orbit, units = "m", format = ValueInfoItem.SI, siSigFigs = 6, category = InfoItem.Category.Orbit)] //Apoapsis
         public double OrbitApA;
 
-        [ValueInfoItem("#MechJeb_ArgumentOfPeriapsis", InfoItem.Category.Orbit, format = "F1", units = "º")] //Argument of periapsis
+        [ValueInfoItem("#MechJeb_ArgumentOfPeriapsis", InfoItem.Category.Orbit, format = "F1", units = "°")] //Argument of periapsis
         public double OrbitArgumentOfPeriapsis;
 
         [ValueInfoItem("#MechJeb_Eccentricity", InfoItem.Category.Orbit, format = "F3")] //Eccentricity
         public double OrbitEccentricity;
 
-        [ValueInfoItem("#MechJeb_Inclination", InfoItem.Category.Orbit, format = "F3", units = "º")] //Inclination
+        [ValueInfoItem("#MechJeb_Inclination", InfoItem.Category.Orbit, format = "F3", units = "°")] //Inclination
         public double OrbitInclination;
 
         [ValueInfoItem("#MechJeb_LAN", InfoItem.Category.Orbit, format = ValueInfoItem.ANGLE)] //LAN
@@ -244,7 +249,7 @@ namespace MuMech
 
         public bool ParachuteDeployed;
 
-        [ValueInfoItem("#MechJeb_Pitch", InfoItem.Category.Surface, format = "F1", units = "º")] //Pitch
+        [ValueInfoItem("#MechJeb_Pitch", InfoItem.Category.Surface, format = "F1", units = "°")] //Pitch
         public double Pitch;
 
         [ValueInfoItem("#MechJeb_PureDrag", InfoItem.Category.Vessel, format = ValueInfoItem.SI, units = "m/s²")] //Pure Drag
@@ -264,7 +269,7 @@ namespace MuMech
 
         public bool RCSThrust;
 
-        [ValueInfoItem("#MechJeb_Roll", InfoItem.Category.Surface, format = "F1", units = "º")] //Roll
+        [ValueInfoItem("#MechJeb_Roll", InfoItem.Category.Surface, format = "F1", units = "°")] //Roll
         public double Roll;
 
         public Vector3d RootPartPosition;
@@ -423,6 +428,10 @@ namespace MuMech
         public double ThrustMinimum   => Vector3d.Dot(ThrustVectorMinThrottle, Forward);
         public double ThrustCurrent   => Vector3d.Dot(ThrustVectorLastFrame, Forward);
 
+        // Fraction of ThrustAvailable the engines produce at zero throttle, so thrust at throttle t is
+        // ThrustMinimum + (ThrustAvailable - ThrustMinimum) * t.  Zero when no thrust is available.
+        public double MinThrottle => ThrustAvailable > 0 ? Clamp(ThrustMinimum / ThrustAvailable, 0, 1) : 0;
+
         // Acceleration in the forward direction, for when dividing by mass is too complicated.
         public double MaxThrustAcceleration     => ThrustAvailable / Mass;
         public double MinThrustAcceleration     => ThrustMinimum / Mass;
@@ -459,12 +468,11 @@ namespace MuMech
         public double MET => Time - Math.Max(LaunchTime, Vessel.launchTime);
 
         [GeneralInfoItem("#MechJeb_DebugString", InfoItem.Category.Misc, showInEditor = true)] //Debug String
-        public void DebugString()
-        {
-            GUILayout.BeginVertical();
-            GUILayout.Label(Message);
-            GUILayout.EndVertical();
-        }
+        public void DebugString() { }
+
+        public override void OnVesselWasModified(Vessel v) => _farForceCacheInvalid = true;
+
+        public override void OnVesselStandardModification(Vessel v) => _farForceCacheInvalid = true;
 
         public override void OnStart(PartModule.StartState state) => GameEvents.onLaunch.Add(OnLaunch);
 
@@ -606,7 +614,7 @@ namespace MuMech
 
             // Displacement Angle, angle between surface velocity and the ship-nose vector (KSP "up" vector) -- ignores roll of the craft (0 to 180 degrees)
             double tempAoD = UtilMath.Rad2Deg *
-                Math.Acos(Clamp(Vector3.Dot(Vessel.ReferenceTransform.up, SurfaceVelocity.normalized), -1, 1));
+                SafeAcos(Vector3.Dot(Vessel.ReferenceTransform.up, SurfaceVelocity.normalized));
             AoD = double.IsNaN(tempAoD) || SpeedSurface < 0.01 ? 0 : tempAoD;
 
             // Fix Unity Left-Handed NEU eulerAngles to Right-Handed NED
@@ -625,8 +633,8 @@ namespace MuMech
 
             double atmosphericPressure = FlightGlobals.getStaticPressure(AltitudeASL, Vessel.mainBody);
             //if (atmosphericPressure < vessel.mainBody.atmosphereMultiplier * 1e-6) atmosphericPressure = 0;
-            double temperature = FlightGlobals.getExternalTemperature(AltitudeASL);
-            AtmosphericDensity = FlightGlobals.getAtmDensity(atmosphericPressure, temperature);
+            double temperature = FlightGlobals.getExternalTemperature(AltitudeASL, Vessel.mainBody);
+            AtmosphericDensity = FlightGlobals.getAtmDensity(atmosphericPressure, temperature, Vessel.mainBody);
             AtmosphericDensityInGrams = AtmosphericDensity * 1000;
 
             DynamicPressure = GetDynamicPressure();
@@ -700,20 +708,23 @@ namespace MuMech
             MechJebModuleRCSBalancer rcsbal = Vessel.GetMasterMechJeb().Rcsbal;
             if (rcsbal.Enabled)
             {
-                Vector3d rot = Vector3d.zero;
                 foreach (Vector6.Direction dir6 in Vector6.Values)
                 {
                     Vector3d dir = Vector6.Directions[(int)dir6];
                     rcsbal.GetThrottles(dir, out double[] throttles, out IReadOnlyList<RCSSolver.Thruster> thrusters);
-                    if (throttles == null) continue;
 
-                    for (int j = 0; j < throttles.Length; j++)
+                    // While a direction is being solved the balancer leaves the
+                    // thrusters as they are, so that isn't a loss of thrust.
+                    bool solved = throttles.Length == thrusters.Count;
+
+                    for (int j = 0; j < thrusters.Count; j++)
                     {
-                        if (throttles[j] <= 0) continue;
+                        double throttle = solved ? throttles[j] : 1;
+                        if (throttle <= 0) continue;
 
-                        Vector3d force = thrusters[j].GetThrust(dir, rot);
-                        RCSThrustAvailable.Add(
-                            Vessel.GetTransform().InverseTransformDirection(dir * Vector3d.Dot(force * throttles[j], dir)));
+                        // The solver works in the vessel's frame, like dir.
+                        Vector3d force = thrusters[j].GetThrust(dir.ToV3(), V3.zero).ToVector3d();
+                        RCSThrustAvailable.Add(dir * Vector3d.Dot(force * throttle, dir));
                         // Are we missing an rcsTorqueAvailable calculation here?
                     }
                 }
@@ -723,8 +734,10 @@ namespace MuMech
 
             foreach (Part p in Vessel.parts)
             {
-                foreach (PartModule m in p.Modules)
+                PartModuleList rcsModules = p.Modules;
+                for (int mi = 0; mi < rcsModules.Count; mi++)
                 {
+                    PartModule m = rcsModules[mi];
                     var rcs = m as ModuleRCS;
 
                     if (rcs == null)
@@ -759,7 +772,7 @@ namespace MuMech
 
                         Vector3d thrustDirection = rcs.useZaxis ? -t.forward : -t.up;
 
-                        float power = rcs.thrusterPower * rcs.thrustPercentage * 0.01f;
+                        float power = rcs.thrusterPower * rcs.thrustPercentage * 0.01f * (float)rcs.flowMult;
 
                         if (FlightInputHandler.fetch.precisionMode)
                         {
@@ -796,52 +809,26 @@ namespace MuMech
         }
 
         [GeneralInfoItem("#MechJeb_RCSTranslation", InfoItem.Category.Vessel, showInEditor = true)] //RCS Translation
-        public void RCSTranslation()
-        {
-            GUILayout.BeginVertical();
-            GUILayout.Label(Localizer.Format("#MechJeb_RCSTranslation")); //"RCS Translation"
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Pos", GuiUtils.LayoutExpandWidth); //
-            GUILayout.Label(MuUtils.PrettyPrint(RCSThrustAvailable.Positive), GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Neg", GuiUtils.LayoutExpandWidth); //
-            GUILayout.Label(MuUtils.PrettyPrint(RCSThrustAvailable.Negative), GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndHorizontal();
-            GUILayout.EndVertical();
-        }
+        public void RCSTranslation() { }
 
         [GeneralInfoItem("#MechJeb_RCSTorque", InfoItem.Category.Vessel, showInEditor = true)] //RCS Torque
-        public void RCSTorque()
-        {
-            GUILayout.BeginVertical();
-            GUILayout.Label(Localizer.Format("#MechJeb_RCSTorque")); //"RCS Torque"
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Pos", GuiUtils.LayoutExpandWidth);
-            GUILayout.Label(MuUtils.PrettyPrint(RCSTorqueAvailable.Positive), GuiUtils.LayoutNoExpandWidth);
-            //GUILayout.Label(MuUtils.PrettyPrint(torqueRcs.positive), GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Neg", GuiUtils.LayoutExpandWidth);
-            GUILayout.Label(MuUtils.PrettyPrint(RCSTorqueAvailable.Negative), GuiUtils.LayoutNoExpandWidth);
-            //GUILayout.Label(MuUtils.PrettyPrint(torqueRcs.negative), GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndHorizontal();
-            GUILayout.EndVertical();
-        }
+        public void RCSTorque() { }
 
         private void CalculateVesselAeroForcesWithCache(Vessel v, out Vector3 farForce, Vector3d surfaceVelocity,
             double altitudeASL)
         {
             float aoa = Vector3.Angle(v.rootPart.transform.TransformDirection(Vector3.up), surfaceVelocity);
-            if ((_lastSurfaceVelocity - surfaceVelocity).sqrMagnitude > D_VELOCITY_SQR_THRESHOLD
+            if (_farForceCacheInvalid
+                || (_lastSurfaceVelocity - surfaceVelocity).sqrMagnitude > D_VELOCITY_SQR_THRESHOLD
                 || Math.Abs(altitudeASL - _lastAltitudeAsl) > D_ALTITUDE_THRESHOLD
-                || (surfaceVelocity.sqrMagnitude > D_VELOCITY_SQR_MIN_THRESHOLD && aoa - _lastAoA > F_AO_A_THRESHOLD))
+                || (surfaceVelocity.sqrMagnitude > D_VELOCITY_SQR_MIN_THRESHOLD && Math.Abs(aoa - _lastAoA) > F_AO_A_THRESHOLD))
             {
                 FARCalculateVesselAeroForces.Call(v, out farForce, out _, surfaceVelocity, altitudeASL);
                 _lastSurfaceVelocity = surfaceVelocity;
                 _lastAltitudeAsl = altitudeASL;
                 _lastAoA = aoa;
                 _lastFarForce = farForce;
+                _farForceCacheInvalid = false;
             }
             else
             {
@@ -858,9 +845,12 @@ namespace MuMech
 
             TorqueAvailable = Vector3d.zero;
 
-            var torqueWeightedExponentialResponseDelay6 = new Vector6();
-            var torqueWeightedLinearResponseDelay6 = new Vector6();
-            var torqueReactionSpeed6 = new Vector6(); // FIXME: probably buggy + remove.
+            Vector6 torqueWeightedExponentialResponseDelay6 = _torqueWeightedExponentialResponseDelay6;
+            Vector6 torqueWeightedLinearResponseDelay6 = _torqueWeightedLinearResponseDelay6;
+            Vector6 torqueReactionSpeed6 = _torqueReactionSpeed6; // FIXME: probably buggy + remove.
+            torqueWeightedExponentialResponseDelay6.Reset();
+            torqueWeightedLinearResponseDelay6.Reset();
+            torqueReactionSpeed6.Reset();
 
             TorqueReactionWheel.Reset();
             TorqueControlSurface.Reset();
@@ -930,8 +920,10 @@ namespace MuMech
                 _engines.Clear();
                 _gimbals.Clear();
 
-                foreach (PartModule pm in p.Modules)
+                PartModuleList modules = p.Modules;
+                for (int mi = 0; mi < modules.Count; mi++)
                 {
+                    PartModule pm = modules[mi];
                     if (!pm.isEnabled)
                         continue;
 
@@ -989,8 +981,8 @@ namespace MuMech
                                     {
                                         float effectiveActuatorDelay = (float)Clamp(50 - surface.actuatorSpeed / surface.ctrlSurfaceRange, 0, 50);
 
-                                        torqueWeightedExponentialResponseDelay6.Positive = effectiveActuatorDelay * ctrlTorquePos.Abs();
-                                        torqueWeightedExponentialResponseDelay6.Negative = effectiveActuatorDelay * ctrlTorqueNeg.Abs();
+                                        torqueWeightedExponentialResponseDelay6.Positive += effectiveActuatorDelay * ctrlTorquePos.Abs();
+                                        torqueWeightedExponentialResponseDelay6.Negative += effectiveActuatorDelay * ctrlTorqueNeg.Abs();
                                     }
                                     else
                                     {
@@ -998,8 +990,8 @@ namespace MuMech
                                         // XXX: this should probably be tweakable
                                         float effectiveActuatorDelay = (float)Clamp(50 - 10 * surface.actuatorSpeed / surface.ctrlSurfaceRange, 0, 50);
 
-                                        torqueWeightedLinearResponseDelay6.Positive = effectiveActuatorDelay * ctrlTorquePos.Abs();
-                                        torqueWeightedLinearResponseDelay6.Negative = effectiveActuatorDelay * ctrlTorqueNeg.Abs();
+                                        torqueWeightedLinearResponseDelay6.Positive += effectiveActuatorDelay * ctrlTorquePos.Abs();
+                                        torqueWeightedLinearResponseDelay6.Negative += effectiveActuatorDelay * ctrlTorqueNeg.Abs();
                                     }
 
                                     torqueReactionSpeed6.Add(Mathf.Abs(surface.ctrlSurfaceRange) / surface.actuatorSpeed *
@@ -1185,48 +1177,7 @@ namespace MuMech
         }
 
         [GeneralInfoItem("#MechJeb_Torque", InfoItem.Category.Vessel, showInEditor = true)] //Torque
-        public void TorqueCompare()
-        {
-            var reactionTorque = Vector3d.Max(TorqueReactionWheel.Positive, TorqueReactionWheel.Negative);
-            //var rcsTorque = Vector3d.Max(torqueRcs.positive, torqueRcs.negative);
-
-            var rcsTorqueMJ = Vector3d.Max(RCSTorqueAvailable.Positive, RCSTorqueAvailable.Negative);
-
-            var controlTorque = Vector3d.Max(TorqueControlSurface.Positive, TorqueControlSurface.Negative);
-            var gimbalTorque = Vector3d.Max(TorqueGimbal.Positive, TorqueGimbal.Negative);
-            var diffTorque = Vector3d.Max(_einfo.TorqueDifferentialThrottle.Positive, _einfo.TorqueDifferentialThrottle.Negative);
-            diffTorque.y = 0;
-            var othersTorque = Vector3d.Max(TorqueOthers.Positive, TorqueOthers.Negative);
-
-            GUILayout.Label("Torque sources", GuiUtils.LabelNoWrap);
-            GUILayout.BeginHorizontal();
-
-            GUILayout.BeginVertical();
-            GUILayout.Label("ReactionWheel", GuiUtils.LabelNoWrap);
-
-            GUILayout.Label("RCS", GuiUtils.LabelNoWrap);
-            //GUILayout.Label("RCS MJ", GuiUtils.LabelNoWrap);
-
-            GUILayout.Label("ControlSurface", GuiUtils.LabelNoWrap);
-            GUILayout.Label("Gimbal", GuiUtils.LabelNoWrap);
-            GUILayout.Label("Diff Throttle", GuiUtils.LabelNoWrap);
-            GUILayout.Label("Others (FAR)", GuiUtils.LabelNoWrap);
-            GUILayout.EndVertical();
-
-            GUILayout.BeginVertical();
-            GUILayout.Label(MuUtils.PrettyPrint(reactionTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-            //GUILayout.Label(MuUtils.PrettyPrint(rcsTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-
-            GUILayout.Label(MuUtils.PrettyPrint(rcsTorqueMJ), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-
-            GUILayout.Label(MuUtils.PrettyPrint(controlTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-            GUILayout.Label(MuUtils.PrettyPrint(gimbalTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-            GUILayout.Label(MuUtils.PrettyPrint(diffTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-            GUILayout.Label(MuUtils.PrettyPrint(othersTorque), GuiUtils.LabelNoWrap, GuiUtils.LayoutNoExpandWidth);
-            GUILayout.EndVertical();
-
-            GUILayout.EndHorizontal();
-        }
+        public void TorqueCompare() { }
 
         private void UpdateResourceRequirements(EngineInfo einfo, IntakeInfo iinfo)
         {
@@ -1359,7 +1310,7 @@ namespace MuMech
 
                 _atmP0 = (float)(vessel.staticPressurekPa * PhysicsGlobals.KpaToAtmospheres);
                 float alt1 = (float)(vessel.altitude + TimeWarp.fixedDeltaTime * vessel.verticalSpeed);
-                _atmP1 = (float)(FlightGlobals.getStaticPressure(alt1) * PhysicsGlobals.KpaToAtmospheres);
+                _atmP1 = (float)(FlightGlobals.getStaticPressure(alt1, vessel.mainBody) * PhysicsGlobals.KpaToAtmospheres);
             }
 
             public void CheckUllageStatus(ModuleEngines e)
@@ -1454,65 +1405,70 @@ namespace MuMech
                     currentMinThrust = currentMaxThrust;
                 }
 
-                // Reset gimbals to default rotation
-                foreach (ModuleGimbal gimbal in gimbals)
+                try
                 {
-                    if (gimbal.gimbalLock)
-                        continue;
-
-                    for (int i = 0; i < gimbal.gimbalTransforms.Count; i++)
+                    // Reset gimbals to default rotation
+                    foreach (ModuleGimbal gimbal in gimbals)
                     {
-                        Transform gimbalTransform = gimbal.gimbalTransforms[i];
-                        _rotSave.Add(new KeyValuePair<Transform, Quaternion>(gimbalTransform, gimbalTransform.localRotation));
-                        gimbalTransform.localRotation = gimbal.initRots[i];
-                    }
-                }
+                        if (gimbal.gimbalLock)
+                            continue;
 
-                for (int i = 0; i < e.thrustTransforms.Count; i++)
+                        for (int i = 0; i < gimbal.gimbalTransforms.Count; i++)
+                        {
+                            Transform gimbalTransform = gimbal.gimbalTransforms[i];
+                            _rotSave.Add(new KeyValuePair<Transform, Quaternion>(gimbalTransform, gimbalTransform.localRotation));
+                            gimbalTransform.localRotation = gimbal.initRots[i];
+                        }
+                    }
+
+                    for (int i = 0; i < e.thrustTransforms.Count; i++)
+                    {
+                        Transform transform = e.thrustTransforms[i];
+                        // The rotation makes a +z vector point in the direction that molecules are ejected
+                        // from the engine.  The resulting thrust force is in the opposite direction.
+                        Vector3d thrustDirectionVector = -transform.forward;
+
+                        float thrustTransformMultiplier = e.thrustTransformMultipliers[i];
+                        double tCurrentThrust = eCurrentThrust * thrustTransformMultiplier;
+                        double tMaxThrust = eMaxThrust * thrustTransformMultiplier;
+
+                        ThrustCurrent += tCurrentThrust * thrustDirectionVector;
+                        ThrustMax += tMaxThrust * thrustDirectionVector;
+                        ThrustMin += eMinThrust * thrustDirectionVector * thrustTransformMultiplier;
+
+                        // CoT (and hence ThrustForward, the neutral trim axis) is weighted by max thrust, not
+                        // current thrust, so the axis is a fixed property of the airframe, otherwise e.g. diff throttle
+                        // would wind up pushing its own setpoint around.  Do not design rockets which have a neutral
+                        // trim axis that is significantly different at minthrottle than maxthrottle.
+                        cot += tMaxThrust * (Vector3d)transform.position;
+                        // DoT is the actual current direction of thrust.
+                        dot -= tCurrentThrust * thrustDirectionVector;
+                        coTWeightSum += tMaxThrust;
+
+                        Quaternion inverseVesselRot = e.part.vessel.ReferenceTransform.rotation.Inverse();
+                        Vector3d thrustDir = inverseVesselRot * thrustDirectionVector;
+                        Vector3d pos = inverseVesselRot * (transform.position - _com);
+
+                        maxVariableForce += (currentMaxThrust - currentMinThrust) * thrustDir * thrustTransformMultiplier;
+                        constantForce += currentMinThrust * thrustDir * thrustTransformMultiplier;
+                        maxVariableTorque += (currentMaxThrust - currentMinThrust) * thrustTransformMultiplier * Vector3d.Cross(pos, thrustDir);
+                        constantTorque += currentMinThrust * thrustTransformMultiplier * Vector3d.Cross(pos, thrustDir);
+
+                        if (!e.throttleLocked)
+                        {
+                            TorqueDifferentialThrottle.Add(Vector3d.Cross(pos, thrustDir) * (float)(maxThrust - minThrust) * thrustTransformMultiplier);
+                        }
+                    }
+
+                    enginesWrappers.Add(new EngineWrapper(e, maxVariableForce, constantTorque, maxVariableTorque));
+                }
+                finally
                 {
-                    Transform transform = e.thrustTransforms[i];
-                    // The rotation makes a +z vector point in the direction that molecules are ejected
-                    // from the engine.  The resulting thrust force is in the opposite direction.
-                    Vector3d thrustDirectionVector = -transform.forward;
-
-                    float thrustTransformMultiplier = e.thrustTransformMultipliers[i];
-                    double tCurrentThrust = eCurrentThrust * thrustTransformMultiplier;
-                    double tMaxThrust = eMaxThrust * thrustTransformMultiplier;
-
-                    ThrustCurrent += tCurrentThrust * thrustDirectionVector;
-                    ThrustMax += tMaxThrust * thrustDirectionVector;
-                    ThrustMin += eMinThrust * thrustDirectionVector * thrustTransformMultiplier;
-
-                    // CoT (and hence ThrustForward, the neutral trim axis) is weighted by max thrust, not
-                    // current thrust, so the axis is a fixed property of the airframe, otherwise e.g. diff throttle
-                    // would wind up pushing its own setpoint around.  Do not design rockets which have a neutral
-                    // trim axis that is significantly different at minthrottle than maxthrottle.
-                    cot += tMaxThrust * (Vector3d)transform.position;
-                    // DoT is the actual current direction of thrust.
-                    dot -= tCurrentThrust * thrustDirectionVector;
-                    coTWeightSum += tMaxThrust;
-
-                    Quaternion inverseVesselRot = e.part.vessel.ReferenceTransform.rotation.Inverse();
-                    Vector3d thrustDir = inverseVesselRot * thrustDirectionVector;
-                    Vector3d pos = inverseVesselRot * (transform.position - _com);
-
-                    maxVariableForce += (currentMaxThrust - currentMinThrust) * thrustDir * thrustTransformMultiplier;
-                    constantForce += currentMinThrust * thrustDir * thrustTransformMultiplier;
-                    maxVariableTorque += (currentMaxThrust - currentMinThrust) * thrustTransformMultiplier * Vector3d.Cross(pos, thrustDir);
-                    constantTorque += currentMinThrust * thrustTransformMultiplier * Vector3d.Cross(pos, thrustDir);
-
-                    if (!e.throttleLocked)
-                    {
-                        TorqueDifferentialThrottle.Add(Vector3d.Cross(pos, thrustDir) * (float)(maxThrust - minThrust) * thrustTransformMultiplier);
-                    }
+                    // Restore gimbals rotation, in reverse in case two gimbals share a transform
+                    for (int i = _rotSave.Count - 1; i >= 0; i--)
+                        _rotSave[i].Key.localRotation = _rotSave[i].Value;
+                    _rotSave.Clear();
                 }
-
-                enginesWrappers.Add(new EngineWrapper(e, maxVariableForce, constantTorque, maxVariableTorque));
-
-                // Restore gimbals rotation, in reverse in case two gimbals share a transform
-                for (int i = _rotSave.Count - 1; i >= 0; i--)
-                    _rotSave[i].Key.localRotation = _rotSave[i].Value;
-                _rotSave.Clear();
 
                 if (e.useEngineResponseTime)
                 {
@@ -1667,11 +1623,18 @@ namespace MuMech
                 float alt1 = (float)(vessel.altitude + dT * vessel.verticalSpeed);
 
                 double staticPressure1 = vessel.staticPressurekPa;
-                double staticPressure2 = FlightGlobals.getStaticPressure(alt1);
+                double staticPressure2 = FlightGlobals.getStaticPressure(alt1, vessel.mainBody);
 
                 // As with thrust, here too we should get the static pressure at the intake, not at the center of mass.
-                double atmDensity0 = FlightGlobals.getAtmDensity(staticPressure1, vessel.externalTemperature);
-                double atmDensity1 = FlightGlobals.getAtmDensity(staticPressure2, FlightGlobals.getExternalTemperature(alt1));
+                double atmDensity0 = FlightGlobals.getAtmDensity(staticPressure1, vessel.atmosphericTemperature, vessel.mainBody);
+
+                // match vessel.atmosphericTemperature, which the FlightIntegrator computes as GetFullTemperature(altitude, offset).  the
+                // latitude/sun offset barely changes over one timestep, so reuse the integrator's.  (don't use GetFullTemperature(Vector3d),
+                // in stock it returns only the offset, not the temperature.)
+                FlightIntegrator fi = vessel.FindVesselModuleImplementing<FlightIntegrator>();
+                double tempOffset = fi != null ? fi.atmosphereTemperatureOffset : 0;
+                double temperature1 = vessel.mainBody.atmosphere ? vessel.mainBody.GetFullTemperature(alt1, tempOffset) : 0;
+                double atmDensity1 = FlightGlobals.getAtmDensity(staticPressure2, temperature1, vessel.mainBody);
 
                 double v0SpeedOfSound = vessel.mainBody.GetSpeedOfSound(staticPressure1, atmDensity0);
                 double v1SpeedOfSound = vessel.mainBody.GetSpeedOfSound(staticPressure2, atmDensity1);
@@ -1738,7 +1701,7 @@ namespace MuMech
             private double MassProvided(double vesselSpeed, Vector3d normVesselSpeed, double atmDensity, double staticPressure, float mach,
                 ModuleResourceIntake intake, Vector3d intakeFwd)
             {
-                if ((intake.checkForOxygen && !FlightGlobals.currentMainBody.atmosphereContainsOxygen) ||
+                if ((intake.checkForOxygen && !intake.part.vessel.mainBody.atmosphereContainsOxygen) ||
                     staticPressure < intake.kPaThreshold) // TODO : add the new test (the bool and maybe the attach node ?)
                 {
                     return 0;

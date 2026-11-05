@@ -36,54 +36,31 @@ namespace MuMech
         public readonly EditableDouble MaxDynamicPressure = new EditableDouble(20000);
 
         [GeneralInfoItem("#MechJeb_LimittoMaxQ", InfoItem.Category.Thrust)] //Limit to Max Q
-        public void LimitToMaxDynamicPressureInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.DYNAMIC_PRESSURE ? GuiUtils.GreenToggle : null;
-            GuiUtils.ToggledTextBox(ref LimitDynamicPressure, CachedLocalizer.Instance.MechJebAscentCheckbox11, MaxDynamicPressure, "Pa", s, 80);
-        }
+        public void LimitToMaxDynamicPressureInfoItem() { }
 
         [Persistent(pass = (int)Pass.GLOBAL)]
         public bool LimitToPreventOverheats;
 
         [GeneralInfoItem("#MechJeb_PreventEngineOverheats", InfoItem.Category.Thrust)] //Prevent engine overheats
-        public void LimitToPreventOverheatsInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.TEMPERATURE ? GuiUtils.GreenToggle : GuiUtils.Skin.toggle;
-            LimitToPreventOverheats =
-                GUILayout.Toggle(LimitToPreventOverheats, CachedLocalizer.Instance.MechJebAscentCheckbox12, s); //"Prevent engine overheats"
-        }
+        public void LimitToPreventOverheatsInfoItem() { }
 
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public bool LimitToPreventFlameout;
 
         [GeneralInfoItem("#MechJeb_PreventJetFlameout", InfoItem.Category.Thrust)] //Prevent jet flameout
-        public void LimitToPreventFlameoutInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.FLAMEOUT ? GuiUtils.GreenToggle : GuiUtils.Skin.toggle;
-            LimitToPreventFlameout =
-                GUILayout.Toggle(LimitToPreventFlameout, CachedLocalizer.Instance.MechJebAscentCheckbox13, s); //"Prevent jet flameout"
-        }
+        public void LimitToPreventFlameoutInfoItem() { }
 
         [Persistent(pass = (int)Pass.GLOBAL)]
         public bool LimitToPreventUnstableIgnition;
 
         [GeneralInfoItem("#MechJeb_PreventUnstableIgnition", InfoItem.Category.Thrust)] //Prevent unstable ignition
-        public void LimitToPreventUnstableIgnitionInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.UNSTABLE_IGNITION ? GuiUtils.GreenToggle : GuiUtils.Skin.toggle;
-            LimitToPreventUnstableIgnition =
-                GUILayout.Toggle(LimitToPreventUnstableIgnition, CachedLocalizer.Instance.MechJebAscentCheckbox14, s); //"Prevent unstable ignition"
-        }
+        public void LimitToPreventUnstableIgnitionInfoItem() { }
 
         [Persistent(pass = (int)Pass.GLOBAL)]
         public bool AutoRCSUllaging = true;
 
         [GeneralInfoItem("#MechJeb_UseRCStoullage", InfoItem.Category.Thrust)] //Use RCS to ullage
-        public void AutoRCsUllageInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.AUTO_RCS_ULLAGE ? GuiUtils.GreenToggle : GuiUtils.Skin.toggle;
-            AutoRCSUllaging = GUILayout.Toggle(AutoRCSUllaging, CachedLocalizer.Instance.MechJebAscentCheckbox15, s); //"Use RCS to ullage"
-        }
+        public void AutoRCsUllageInfoItem() { }
 
         // 5% safety margin on flameouts
         [Persistent(pass = (int)Pass.GLOBAL)]
@@ -99,12 +76,7 @@ namespace MuMech
         public readonly EditableDouble MaxAcceleration = 40;
 
         [GeneralInfoItem("#MechJeb_LimitAcceleration", InfoItem.Category.Thrust)] //Limit Acceleration
-        public void LimitAccelerationInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.ACCELERATION ? GuiUtils.GreenToggle : null;
-            GuiUtils.ToggledTextBox(ref LimitAcceleration, CachedLocalizer.Instance.MechJebAscentCheckbox16, MaxAcceleration, "m/s²", s,
-                30); //"Limit acceleration to"
-        }
+        public void LimitAccelerationInfoItem() { }
 
         [Persistent(pass = (int)Pass.LOCAL)]
         public bool LimitThrottle;
@@ -113,12 +85,7 @@ namespace MuMech
         public readonly EditableDoubleMult MaxThrottle = new EditableDoubleMult(1, 0.01);
 
         [GeneralInfoItem("#MechJeb_LimitThrottle", InfoItem.Category.Thrust)] //Limit throttle
-        public void LimitThrottleInfoItem()
-        {
-            GUIStyle s = Limiter == LimitMode.THROTTLE ? MaxThrottle > 0d ? GuiUtils.GreenToggle : GuiUtils.RedToggle : null;
-            GuiUtils.ToggledTextBox(ref LimitThrottle, CachedLocalizer.Instance.MechJebAscentCheckbox17, MaxThrottle, "%", s,
-                30); //"Limit throttle to"
-        }
+        public void LimitThrottleInfoItem() { }
 
         [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
         public bool LimiterMinThrottle;
@@ -126,35 +93,14 @@ namespace MuMech
         [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult MinThrottle = new EditableDoubleMult(0.05, 0.01);
 
-        private static GUIContent _limiterMinThrottleContent;
-
         [GeneralInfoItem("#MechJeb_LowerThrottleLimit", InfoItem.Category.Thrust)] //Lower throttle limit
-        public void LimiterMinThrottleInfoItem()
-        {
-            // RF users should almost always have this set, "stock" users should almost always never have this set
-            bool warn = ReflectionUtils.IsLoadedRealFuels ? !LimiterMinThrottle || MinThrottle <= 0d : LimiterMinThrottle && MinThrottle > 0d;
-            GUIStyle s = Limiter == LimitMode.MIN_THROTTLE ? GuiUtils.GreenToggle : warn ? GuiUtils.YellowToggle : null;
-            _limiterMinThrottleContent ??= new GUIContent(CachedLocalizer.Instance.MechJebAscentCheckbox18,
-                Localizer.Format("#MechJeb_Ascent_checkbox18_tooltip"));
-            GuiUtils.ToggledTextBox(ref LimiterMinThrottle, _limiterMinThrottleContent, MinThrottle, "%", s, 30); //"Keep limited throttle over"
-        }
+        public void LimiterMinThrottleInfoItem() { }
 
         [UsedImplicitly, Persistent(pass = (int)Pass.TYPE)]
         public bool DifferentialThrottle;
 
         [GeneralInfoItem("#MechJeb_DifferentialThrottle", InfoItem.Category.Thrust)] //Differential throttle
-        public void DifferentialThrottleMenu()
-        {
-            bool oldDifferentialThrottle = Core.Thrust.DifferentialThrottle;
-            GUIStyle s = DifferentialThrottle && Vessel.LiftedOff()
-                ? Core.Thrust.DifferentialThrottleSuccess == DifferentialThrottleStatus.SUCCESS ? GuiUtils.GreenToggle : GuiUtils.YellowToggle
-                : GuiUtils.Skin.toggle;
-            DifferentialThrottle =
-                GUILayout.Toggle(DifferentialThrottle, CachedLocalizer.Instance.MechJebAscentCheckbox19, s); //"Differential throttle"
-
-            if (oldDifferentialThrottle && !Core.Thrust.DifferentialThrottle)
-                Core.Thrust.DisableDifferentialThrottle();
-        }
+        public void DifferentialThrottleMenu() { }
 
         public Vector3d DifferentialThrottleDemandedTorque;
 
@@ -166,6 +112,13 @@ namespace MuMech
         private readonly Dictionary<ModuleEngines, float> _thrustLimitsBeforeDifferentialThrottle =
             new Dictionary<ModuleEngines, float>();
 
+        // Buffers of the differential throttle solve, reused while the engine count stays the same
+        private readonly List<VesselState.EngineWrapper> _diffEngines = new List<VesselState.EngineWrapper>();
+        private double[,] _diffA = new double[0, 0];
+        private double[] _diffB = new double[0];
+        private double[] _diffBoundL = new double[0];
+        private double[] _diffBoundU = new double[0];
+
         [Persistent(pass = (int)Pass.LOCAL)]
         public bool ElectricThrottle;
 
@@ -176,25 +129,7 @@ namespace MuMech
         public readonly EditableDoubleMult ElectricThrottleHi = new EditableDoubleMult(0.15, 0.01);
 
         [GeneralInfoItem("#MechJeb_ElectricLimit", InfoItem.Category.Thrust)] //Electric limit
-        public void LimitElectricInfoItem()
-        {
-            GUILayout.BeginHorizontal();
-            GUIStyle s = GuiUtils.Skin.label;
-            if (Limiter == LimitMode.ELECTRIC)
-            {
-                s = ThrottleLimit < 0.001 ? GuiUtils.RedLabel : GuiUtils.YellowLabel;
-            }
-            else if (ElectricEngineRunning()) s = GuiUtils.GreenLabel;
-
-            ElectricThrottle =
-                GUILayout.Toggle(ElectricThrottle, CachedLocalizer.Instance.MechJebAscentCheckbox20, s,
-                    GuiUtils.LayoutWidth(110)); //"Electric limit Lo"
-            GuiUtils.SimpleTextField(ElectricThrottleLo, 30);
-            GUILayout.Label("% Hi", GuiUtils.ExpandWidth(false));
-            GuiUtils.SimpleTextField(ElectricThrottleHi, 30);
-            GUILayout.Label("%", GuiUtils.ExpandWidth(false));
-            GUILayout.EndHorizontal();
-        }
+        public void LimitElectricInfoItem() { }
 
         public enum LimitMode
         {
@@ -423,7 +358,6 @@ namespace MuMech
                     if (Core.Attitude.AttitudeError >= 2 && (useGimbal || (useDiffThrottle && Core.Thrust.DifferentialThrottle)))
                     {
                         _transPrevThrust = TargetThrottle = 0.1F;
-                        Print(" targetThrottle = 0.1F");
                     }
                     else
                     {
@@ -613,6 +547,15 @@ namespace MuMech
             return (1 - maxTempRatio) / TEMP_SAFETY_MARGIN;
         }
 
+        // Buffers of OptimizeIntakes
+        private readonly List<List<ModuleResourceIntake>> _intakeGroups = new List<List<ModuleResourceIntake>>();
+        private readonly Dictionary<ModuleResourceIntake, int> _intakeGroupIds = new Dictionary<ModuleResourceIntake, int>();
+        private readonly HashSet<Part> _intakeVisited = new HashSet<Part>();
+        private readonly Dictionary<ModuleResourceIntake, VesselState.ResourceInfo.IntakeData> _intakeData =
+            new Dictionary<ModuleResourceIntake, VesselState.ResourceInfo.IntakeData>();
+        private readonly Stack<Part> _intakeStack = new Stack<Part>();
+        private readonly List<int> _intakeOrder = new List<int>();
+
         private float FlameoutSafetyThrottle()
         {
             float throttle = 1;
@@ -688,40 +631,60 @@ namespace MuMech
             // Even just point (1) means we want to solve knapsack.
 
             // Group intakes by symmetry, and collect the information by intake.
-            var groups = new List<List<ModuleResourceIntake>>();
-            var groupIds = new Dictionary<ModuleResourceIntake, int>();
-            var data = new Dictionary<ModuleResourceIntake, VesselState.ResourceInfo.IntakeData>();
+            // The containers are fields, cleared here, so the 50 Hz call allocates nothing once they have grown
+            List<List<ModuleResourceIntake>> groups = _intakeGroups;
+            Dictionary<ModuleResourceIntake, int> groupIds = _intakeGroupIds;
+            HashSet<Part> visited = _intakeVisited;
+            Dictionary<ModuleResourceIntake, VesselState.ResourceInfo.IntakeData> data = _intakeData;
+            Stack<Part> stack = _intakeStack;
+            int groupCount = 0;
+            groupIds.Clear();
+            visited.Clear();
+            data.Clear();
+            stack.Clear();
+            foreach (VesselState.ResourceInfo.IntakeData intakeData in info.Intakes)
+                data[intakeData.Intake] = intakeData;
+
             foreach (VesselState.ResourceInfo.IntakeData intakeData in info.Intakes)
             {
                 ModuleResourceIntake intake = intakeData.Intake;
-                data[intake] = intakeData;
                 if (groupIds.ContainsKey(intake)) { continue; }
 
                 // Create a group for this symmetry
-                int grpId = groups.Count;
-                var intakes = new List<ModuleResourceIntake>();
-                groups.Add(intakes);
+                int grpId = groupCount++;
+                if (grpId == groups.Count)
+                    groups.Add(new List<ModuleResourceIntake>());
+
+                List<ModuleResourceIntake> intakes = groups[grpId];
+                intakes.Clear();
 
                 // In DFS order, get all the symmetric parts.
                 // We can't rely on symmetryCounterparts; see issue #52 by tavert:
                 // https://github.com/MuMech/MechJeb2/issues/52
-                var stack = new Stack<Part>();
                 stack.Push(intake.part);
                 while (stack.Count > 0)
                 {
                     Part part = stack.Pop();
-                    ModuleResourceIntake partIntake = part.Modules.OfType<ModuleResourceIntake>().FirstOrDefault();
-                    if (partIntake == null || groupIds.ContainsKey(partIntake))
+                    if (!visited.Add(part))
                     {
                         continue;
                     }
 
-                    groupIds[partIntake] = grpId;
-                    intakes.Add(partIntake);
-
-                    foreach (Part sympart in part.symmetryCounterparts)
+                    // Only the intakes of this resource: a part can hold several intakes, and the first one may be another resource
+                    PartModuleList modules = part.Modules;
+                    for (int i = 0; i < modules.Count; i++)
                     {
-                        stack.Push(sympart);
+                        if (modules[i] is ModuleResourceIntake partIntake && data.ContainsKey(partIntake) && !groupIds.ContainsKey(partIntake))
+                        {
+                            groupIds[partIntake] = grpId;
+                            intakes.Add(partIntake);
+                        }
+                    }
+
+                    List<Part> counterparts = part.symmetryCounterparts;
+                    for (int i = 0; i < counterparts.Count; i++)
+                    {
+                        stack.Push(counterparts[i]);
                     }
                 }
             }
@@ -732,13 +695,25 @@ namespace MuMech
             double airFlowSoFar = 0;
             var param = new KSPActionParam(KSPActionGroup.None,
                 KSPActionType.Activate);
-            foreach (List<ModuleResourceIntake> grp in groups.OrderBy(grp => grp.Count))
+            // Stable insertion sort on the group size, so we always open the same intakes
+            List<int> order = _intakeOrder;
+            order.Clear();
+            for (int g = 0; g < groupCount; g++)
             {
+                int pos = order.Count;
+                while (pos > 0 && groups[order[pos - 1]].Count > groups[g].Count)
+                    pos--;
+                order.Insert(pos, g);
+            }
+
+            for (int o = 0; o < order.Count; o++)
+            {
+                List<ModuleResourceIntake> grp = groups[order[o]];
                 if (airFlowSoFar < requiredFlow)
                 {
                     foreach (ModuleResourceIntake intake in grp)
                     {
-                        double airFlowThisIntake = data[intake].PredictedMassFlow;
+                        double airFlowThisIntake = data.TryGetValue(intake, out VesselState.ResourceInfo.IntakeData intakeData) ? intakeData.PredictedMassFlow : 0;
                         if (!intake.intakeEnabled)
                         {
                             intake.ToggleAction(param);
@@ -822,6 +797,7 @@ namespace MuMech
                 }
 
                 _pid.Reset();
+                _transPrevThrust = LastThrottle;
                 _tmodeChanged = false;
                 FlightInputHandler.SetNeutralControls();
             }
@@ -916,20 +892,49 @@ namespace MuMech
                 forceScale += VesselState.EngineWrappers[i].MaxVariableForce.magnitude * 10;
             }
 
-            var engines = VesselState.EngineWrappers.Where(eng => !eng.Engine.throttleLocked).ToList();
+            List<VesselState.EngineWrapper> engines = _diffEngines;
+            engines.Clear();
+            for (int i = 0; i < nbEngines; i++)
+            {
+                if (!VesselState.EngineWrappers[i].Engine.throttleLocked)
+                    engines.Add(VesselState.EngineWrappers[i]);
+            }
+
             int n = engines.Count;
 
+            // Every early return gives the limits back: the engines left in the list would keep the last solution.
             if (nbEngines == 0)
+            {
+                DisableDifferentialThrottle();
                 return DifferentialThrottleStatus.ALL_ENGINES_OFF;
+            }
 
             if (nbEngines == 1 || n == 0)
+            {
+                DisableDifferentialThrottle();
                 return DifferentialThrottleStatus.MORE_ENGINES_REQUIRED;
+            }
+
+            // No variable torque or force: the matrix would be 0/0 and minqpsetquadraticterm would throw
+            if (torqueScale <= 0 || forceScale <= 0)
+            {
+                DisableDifferentialThrottle();
+                return DifferentialThrottleStatus.SOLVER_FAILED;
+            }
 
 
-            double[,] a = new double[n, n];
-            double[] b = new double[n];
-            double[] boundL = new double[n];
-            double[] boundU = new double[n];
+            if (_diffB.Length != n)
+            {
+                _diffA = new double[n, n];
+                _diffB = new double[n];
+                _diffBoundL = new double[n];
+                _diffBoundU = new double[n];
+            }
+
+            double[,] a = _diffA;
+            double[] b = _diffB;
+            double[] boundL = _diffBoundL;
+            double[] boundU = _diffBoundU;
 
             for (int i = 0; i < n; i++)
             {
@@ -958,8 +963,11 @@ namespace MuMech
             //var t3 = stopwatch.ElapsedMilliseconds;
             //UnityEngine.Debug.LogFormat("[DiffThrottle] t1: {0}, t2: {1}, t3: {2}", t1, t2 - t1, t3 - t2);
 
-            if (x.Any(double.IsNaN))
+            if (HasNaN(x))
+            {
+                DisableDifferentialThrottle();
                 return DifferentialThrottleStatus.SOLVER_FAILED;
+            }
 
             for (int i = 0; i < n; i++)
             {
@@ -970,6 +978,17 @@ namespace MuMech
             }
 
             return DifferentialThrottleStatus.SUCCESS;
+        }
+
+        private static bool HasNaN(double[] x)
+        {
+            for (int i = 0; i < x.Length; i++)
+            {
+                if (double.IsNaN(x[i]))
+                    return true;
+            }
+
+            return false;
         }
 
         internal void DisableDifferentialThrottle() // internal: also called by the uGUI Utilities view (MechJeb2.UI)

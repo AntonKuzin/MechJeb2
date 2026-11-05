@@ -48,6 +48,28 @@ namespace MuMech
 
         public static double RealMaxAtmosphereAltitude(this CelestialBody body) => !body.atmosphere ? 0 : body.atmosphereDepth;
 
+        // The radius of the lowest circular orbit clear of the atmosphere and the highest terrain
+        public static double SafeOrbitRadius(this CelestialBody body)
+        {
+            double terrain = body.pqsController != null ? Math.Max(body.pqsController.mapMaxHeight, body.pqsController.radiusMax - body.Radius) : 0;
+            return body.Radius + Math.Max(body.RealMaxAtmosphereAltitude(), terrain) + 3000;
+        }
+
+        // Whether a circular orbit of this radius also stays well inside the sphere of influence and away from the moons
+        public static bool IsSafeOrbitRadius(this CelestialBody body, double radius)
+        {
+            if (radius < body.SafeOrbitRadius() || radius > 0.9 * body.sphereOfInfluence)
+                return false;
+
+            foreach (CelestialBody moon in body.orbitingBodies)
+            {
+                if (radius > moon.orbit.PeR - moon.sphereOfInfluence && radius < moon.orbit.ApR + moon.sphereOfInfluence)
+                    return false;
+            }
+
+            return true;
+        }
+
         public static double AltitudeForPressure(this CelestialBody body, double pressure)
         {
             if (!body.atmosphere)
@@ -84,16 +106,24 @@ namespace MuMech
             double latitude, double longitude,
             double sampleRadiusMeters = 50.0)
         {
-            double epsilon = sampleRadiusMeters / (body.Radius * Math.PI / 180.0);
-
-            double hN = body.TerrainAltitude(latitude + epsilon, longitude, true);
-            double hS = body.TerrainAltitude(latitude - epsilon, longitude, true);
-            double hE = body.TerrainAltitude(latitude, longitude + epsilon, true);
-            double hW = body.TerrainAltitude(latitude, longitude - epsilon, true);
-
             double metersPerDeg = body.Radius * Math.PI / 180.0;
-            double dhdx = (hE - hW) / (2.0 * epsilon * metersPerDeg);
-            double dhdy = (hN - hS) / (2.0 * epsilon * metersPerDeg);
+            double epsilon = sampleRadiusMeters / metersPerDeg;
+
+            // a degree of longitude is only cos(latitude) as long, so widen the longitude step to keep it sampleRadiusMeters
+            double cosLat = Math.Max(Math.Cos(latitude * Math.PI / 180.0), 0.01);
+            double epsilonLon = epsilon / cosLat;
+
+            // do not step past the poles, the actual north-south distance is used below
+            double latN = Math.Min(latitude + epsilon, 90.0);
+            double latS = Math.Max(latitude - epsilon, -90.0);
+
+            double hN = body.TerrainAltitude(latN, longitude, true);
+            double hS = body.TerrainAltitude(latS, longitude, true);
+            double hE = body.TerrainAltitude(latitude, longitude + epsilonLon, true);
+            double hW = body.TerrainAltitude(latitude, longitude - epsilonLon, true);
+
+            double dhdx = (hE - hW) / (2.0 * epsilonLon * metersPerDeg * cosLat);
+            double dhdy = latN > latS ? (hN - hS) / ((latN - latS) * metersPerDeg) : 0;
 
             return (float)(Math.Atan(Math.Sqrt(dhdx * dhdx + dhdy * dhdy)) * 180.0 / Math.PI);
         }

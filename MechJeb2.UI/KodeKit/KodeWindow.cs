@@ -9,8 +9,11 @@ using UnityEngine.UI;
 
 namespace KodeKit
 {
-    /// <summary>A short highlight after a click, so an action with no visible result still shows it happened.</summary>
-    public class ClickFlash : MonoBehaviour, IPointerClickHandler
+    /// <summary>
+    /// A short highlight after a click, so an action with no visible result still shows it happened. Disabled between
+    /// flashes, so the hundreds of idle buttons of the open windows cost no Update call: the button's onClick starts it.
+    /// </summary>
+    public class ClickFlash : MonoBehaviour
     {
         public Image Target;
         public static Color FlashColor = new Color(0.55f, 1f, 0.55f, 1f);
@@ -18,16 +21,32 @@ namespace KodeKit
         float start = -1;
         Color baseColor, written;
 
-        public void OnPointerClick(PointerEventData e)
+        /// <summary>Adds a flash to the button, started by its onClick, so a click of a disabled button shows none.</summary>
+        public static ClickFlash Add(Button button, Image target)
         {
-            if (Target == null) return;
+            var flash = button.gameObject.AddComponent<ClickFlash>();
+            flash.Target = target;
+            flash.enabled = false;
+            // a view may destroy the flash (segmented bars, chips): the listener stays on the button
+            button.onClick.AddListener(() => { if (flash != null) flash.Flash(); });
+            return flash;
+        }
+
+        public void Flash()
+        {
+            if (Target == null || !gameObject.activeInHierarchy) return;
             if (start < 0) written = baseColor = Target.color;
             start = Time.unscaledTime;
+            enabled = true;
         }
 
         void Update()
         {
-            if (start < 0) return;
+            if (start < 0)
+            {
+                enabled = false;
+                return;
+            }
             // repainted since the last frame (a selection turning green, a role change): fade back to the new colour
             if (Target.color != written) baseColor = Target.color;
             float t = (Time.unscaledTime - start) / Duration;
@@ -35,6 +54,7 @@ namespace KodeKit
             {
                 Target.color = baseColor;
                 start = -1;
+                enabled = false;
                 return;
             }
             Target.color = written = Color.Lerp(FlashColor, baseColor, t * t);
@@ -63,21 +83,33 @@ namespace KodeKit
         public void OnPointerClick(PointerEventData e) => Click?.Invoke();
     }
 
-    /// <summary>Hold-to-repeat behaviour for GUILayout.RepeatButton parity (fires at once, then every 0.2 s).</summary>
+    /// <summary>
+    /// Hold-to-repeat behaviour for GUILayout.RepeatButton parity: fires on the press, then every 0.2 s while held. The
+    /// first action runs from the press itself, so a press and release in the same frame (a tap, a low frame rate) still
+    /// counts. Real time, so it repeats at the same rate in time warp.
+    /// </summary>
     public class RepeatTrigger : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler
     {
         public Action Action;
+        const float Interval = 0.2f;
         bool held;
         float next;
 
-        public void OnPointerDown(PointerEventData e) { held = true; next = 0; }
+        public void OnPointerDown(PointerEventData e)
+        {
+            held = true;
+            next = Time.unscaledTime + Interval;
+            Action?.Invoke();
+        }
+
         public void OnPointerUp(PointerEventData e) => held = false;
         public void OnPointerExit(PointerEventData e) => held = false;
+        void OnDisable() => held = false;
 
         void Update()
         {
-            if (!held || Time.time < next) return;
-            next = Time.time + 0.2f;
+            if (!held || Time.unscaledTime < next) return;
+            next = Time.unscaledTime + Interval;
             Action?.Invoke();
         }
     }
@@ -139,17 +171,9 @@ namespace KodeKit
             }
         }
 
-        /// <summary>Give each window its own nested Canvas so a dirty text only re-batches that window.</summary>
-        public static bool CanvasPerWindow;
-
         public KodeWindow(RectTransform canvas, string title, float minWidth, Vector2 pos)
         {
             Root = UIKit.CreateUI<KodeRootWindow>(canvas, title);
-            if (CanvasPerWindow)
-            {
-                Root.gameObject.AddComponent<Canvas>();
-                Root.gameObject.AddComponent<GraphicRaycaster>();
-            }
             Root.Vertical().ControlChildSize(true, true).ChildForceExpand(false, false);
             Root.PreferredSizeFitter(true, true).Anchor(AnchorPresets.TopLeft).Pivot(PivotPresets.TopLeft);
             Root.Finish();
@@ -581,10 +605,16 @@ namespace KodeKit
         }
 
         /// <summary>A static text that wraps to the window width (help texts, long descriptions).</summary>
-        public static UIText Paragraph(UIObject parent, string text)
+        public static UIText Paragraph(UIObject parent, string text) => WrapToWidth(Label(parent, text, true));
+
+        /// <summary>A label wraps in the width its parent gives it: its text no longer widens the window, which it would on one line.</summary>
+        public static UIText WrapToWidth(UIText t)
         {
-            UIText t = Label(parent, text, true);
             t.tmpText.enableWordWrapping = true;
+            var le = t.GetComponent<LayoutElement>() ?? t.gameObject.AddComponent<LayoutElement>();
+            le.minWidth = 0;
+            le.preferredWidth = 0;
+            le.flexibleWidth = 1;
             return t;
         }
 
@@ -616,11 +646,11 @@ namespace KodeKit
         {
             t.text = Loc(textOrKey);
             if (textOrKey == null || textOrKey.Length < 2 || textOrKey[0] != '#') return;
-            string tip = TooltipFor?.Invoke(textOrKey);
-            if (tip != null && t.GetComponent<TooltipTrigger>() == null)
+            if (TooltipFor?.Invoke(textOrKey) != null && t.GetComponent<TooltipTrigger>() == null)
             {
                 t.raycastTarget = true;
-                Tooltips.Add(t.gameObject, tip);
+                // looked up when shown, so it follows a language switch like the label
+                Tooltips.Add(t.gameObject, () => TooltipFor?.Invoke(textOrKey));
             }
             t.GetComponentInParent<WindowBehaviour>()?.AddRelocalize(() => t.text = Loc(textOrKey));
         }
@@ -668,12 +698,6 @@ namespace KodeKit
             });
             return t;
         }
-
-        /// <summary>
-        /// Put live labels and input fields in fixed-size boxes with no layout group, so a text change
-        /// stops LayoutRebuilder.MarkLayoutForRebuild at the widget instead of rebuilding the whole window.
-        /// </summary>
-        public static bool IsolateLayout = true;
 
         /// <summary>
         /// A layout cell of fixed height (and fixed or flexible width) whose child text does not drive layout.
@@ -739,7 +763,9 @@ namespace KodeKit
 
         public UIText BoundLabel(UIObject parent, Func<string> value, bool flexible = false)
         {
-            UIText t = IsolateLayout ? IsolatedLabel(parent, value(), flexible) : Label(parent, value(), flexible);
+            // a fixed-size box with no layout group: a text change stops LayoutRebuilder.MarkLayoutForRebuild at the
+            // label instead of rebuilding the whole window
+            UIText t = IsolatedLabel(parent, value(), flexible);
             string last = t.tmpText.text;
             syncs.Add(() =>
             {
@@ -797,7 +823,7 @@ namespace KodeKit
             SetText(label, text);
             var button = b.GetComponent<Button>();
             var img = b.GetComponent<Image>();
-            b.gameObject.AddComponent<ClickFlash>().Target = img;
+            ClickFlash.Add(button, img);
             var buttonLe = b.gameObject.GetComponent<LayoutElement>() ?? b.gameObject.AddComponent<LayoutElement>();
             Styled(b.gameObject, th =>
             {
@@ -808,10 +834,6 @@ namespace KodeKit
             return b;
         }
 
-        /// <summary>
-        /// IMGUI's big state buttons: a GUIStyle with padding 8 on every side (SmartASS, SmartRcs, Translatron), so the
-        /// button is the text's height plus 16.
-        /// </summary>
         /// <summary>A button showing only a sprite (e.g. <see cref="Sprites.Arrow"/>), sized like a one-character button.</summary>
         public static UIButton IconButton(UIObject parent, Sprite icon, Action onClick)
         {
@@ -844,6 +866,10 @@ namespace KodeKit
             return img;
         }
 
+        /// <summary>
+        /// IMGUI's big state buttons: a GUIStyle with padding 8 on every side (SmartASS, SmartRcs, Translatron), so the
+        /// button is the text's height plus 16.
+        /// </summary>
         public static UIButton Padded(UIButton b, int padding = 8)
         {
             b.Content.Padding(padding, padding, padding, padding);
@@ -919,27 +945,6 @@ namespace KodeKit
             });
             if (green != null) ToneText(label, () => green() ? Tone.Good : Tone.Normal);
             return toggle;
-        }
-
-        public TMP_InputField Field(UIObject parent, Ed ed, float width) =>
-            EditFields.Field(this, parent, () => ed.Text, s => ed.Text = s, width);
-
-        /// <summary>GuiUtils.ToggledTextBox: [x] label [field] unit</summary>
-        public void ToggledTextBox(UIObject parent, string text, Func<bool> get, Action<bool> set, Ed ed, string unit, float width, Func<bool> green = null)
-        {
-            Layout row = Row(parent);
-            Toggle(row, text, get, set, green);
-            Field(row, ed, width);
-            if (!string.IsNullOrEmpty(unit)) Label(row, unit);
-        }
-
-        /// <summary>GuiUtils.SimpleTextBox: label [field] unit</summary>
-        public void SimpleTextBox(UIObject parent, string left, Ed ed, string unit, float width, bool horizontalFraming = true)
-        {
-            UIObject row = horizontalFraming ? Row(parent) : parent;
-            if (!string.IsNullOrEmpty(left)) Label(row, left);
-            Field(row, ed, width);
-            if (!string.IsNullOrEmpty(unit)) Label(row, unit);
         }
 
         /// <summary>GuiUtils.ArrowSelector: [&lt;] label [&gt;]</summary>

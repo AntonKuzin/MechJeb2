@@ -93,7 +93,8 @@ namespace MuMech
         // Speed PID D
         public readonly EditableDouble sPIDd = 0.001;
 
-        [ValueInfoItem("#MechJeb_SpeedIntAcc", InfoItem.Category.Rover, format = ValueInfoItem.SI, units = "m/s")] // Speed Int Acc
+        [ValueInfoItem("#MechJeb_SpeedIntAcc", InfoItem.Category.Rover, format = ValueInfoItem.SI)] // Speed Int Acc
+        // the integral's share of the wheel throttle
         public double speedIntAcc;
 
         [ValueInfoItem("#MechJeb_Traction", InfoItem.Category.Rover, format = "F0", units = "%")] // Traction
@@ -101,7 +102,7 @@ namespace MuMech
 
         [EditableInfoItem("#MechJeb_TractionBrakeLimit", InfoItem.Category.Rover), Persistent(pass = (int)Pass.TYPE)]
         // Traction Brake Limit
-        public EditableDouble tractionLimit = 75;
+        public readonly EditableDouble tractionLimit = 75;
 
         public readonly List<(PartModule, BaseField)> wheelbases = new List<(PartModule, BaseField)>();
 
@@ -130,8 +131,14 @@ namespace MuMech
             base.OnDestroy();
         }
 
-        public void OnVesselModified(Vessel v)
+        private bool _wheelbasesDirty = true;
+
+        public void OnVesselModified(Vessel v) => _wheelbasesDirty = true;
+
+        private void RebuildWheelbases()
         {
+            _wheelbasesDirty = false;
+
             // TODO : need to look into the new ModuleWheelSteering ModuleWheelMotor ModuleWheelBrakes ModuleWheelBase ModuleWheelSuspension and see what they could bring
 
             try
@@ -155,7 +162,7 @@ namespace MuMech
             catch (Exception) { }
         }
 
-        [ValueInfoItem("#MechJeb_Headingerror", InfoItem.Category.Rover, format = "F1", units = "º")] // Heading error
+        [ValueInfoItem("#MechJeb_Headingerror", InfoItem.Category.Rover, format = "F1", units = "°")] // Heading error
         public double headingErr;
 
         [ValueInfoItem("#MechJeb_Speederror", InfoItem.Category.Rover, format = ValueInfoItem.SI, units = "m/s")] // Speed error
@@ -188,7 +195,15 @@ namespace MuMech
 
         public void CalculateTraction()
         {
-            if (wheelbases.Count == 0) { OnVesselModified(Vessel); }
+            if (_wheelbasesDirty)
+                RebuildWheelbases();
+
+            // no wheels (hovercraft, boat, all wheels lost) means no traction, not 0 / 0
+            if (wheelbases.Count == 0)
+            {
+                traction = 0;
+                return;
+            }
 
             traction = 0;
 
@@ -234,7 +249,7 @@ namespace MuMech
             curSpeed = Vector3d.Dot(VesselState.SurfaceVelocity, VesselState.Forward);
 
             CalculateTraction();
-            speedIntAcc = speedPID.INTAccum;
+            speedIntAcc = speedPID.ITerm;
 
             if (wp != null && wp.Body == Orbit.referenceBody)
             {
@@ -329,8 +344,6 @@ namespace MuMech
 
             if (ControlHeading)
             {
-                headingPID.INTAccum = Mathf.Clamp((float)headingPID.INTAccum, -1, 1);
-
                 double instantaneousHeading = VesselState.RotationVesselSurface.eulerAngles.y;
                 headingErr = Clamp180(instantaneousHeading - heading);
                 if (s.wheelSteer == s.wheelSteerTrim || FlightGlobals.ActiveVessel != Vessel)
@@ -354,17 +367,11 @@ namespace MuMech
             }
             else if (ControlSpeed)
             {
-                speedPID.INTAccum = Mathf.Clamp((float)speedPID.INTAccum, -5, 5);
-
                 speedErr = (WaypointIndex == -1 ? speed.Val : tgtSpeed) - Vector3d.Dot(VesselState.SurfaceVelocity, VesselState.Forward);
                 if (s.wheelThrottle == s.wheelThrottleTrim || FlightGlobals.ActiveVessel != Vessel)
                 {
                     float act = (float)speedPID.Compute(speedErr);
                     s.wheelThrottle = Mathf.Clamp(act, -1f, 1f);
-                    if (curSpeed < 0 && s.wheelThrottle < 0) { s.wheelThrottle = 0; } // don't go backwards
-
-                    if (Mathf.Sign(act) + Mathf.Sign(s.wheelThrottle) == 0) { s.wheelThrottle = Mathf.Clamp(act, -1f, 1f); }
-
                     if (speedErr < -1 && StabilityControl && Mathf.Sign(s.wheelThrottle) + Math.Sign(curSpeed) == 0)
                     {
                         brake = true;
@@ -376,10 +383,10 @@ namespace MuMech
 
             if (StabilityControl)
             {
-                Physics.Raycast(Vessel.CoM + VesselState.SurfaceVelocity * terrainLookAhead + VesselState.Up * 100, -VesselState.Up,
-                    out RaycastHit hit, 500,
-                    1 << 15, QueryTriggerInteraction.Ignore);
-                Vector3 norm = hit.normal;
+                bool terrainHit = Physics.Raycast(Vessel.CoM + VesselState.SurfaceVelocity * terrainLookAhead + VesselState.Up * 100,
+                    -VesselState.Up, out RaycastHit hit, 500, 1 << 15, QueryTriggerInteraction.Ignore);
+                // a miss (terrain not loaded ahead, a cliff edge, open water) leaves hit.normal at zero: use the local vertical instead
+                Vector3 norm = terrainHit ? hit.normal : (Vector3)VesselState.Up;
 
                 if (!Core.Attitude.Users.Contains(this))
                 {
@@ -392,6 +399,8 @@ namespace MuMech
                     VesselState.Forward * 4 - Vessel.transform.right * s.wheelSteer * Mathf.Sign(fSpeed)
                     : // and then add the steering
                     VesselState.SurfaceVelocity; // in the air so follow velocity
+                if (fwd.sqrMagnitude < 1e-6f)
+                    fwd = VesselState.Forward; // not moving: LookRotation would get a zero vector
                 Vector3.OrthoNormalize(ref norm, ref fwd);
                 var quat = Quaternion.LookRotation(fwd, norm);
 
@@ -457,7 +466,9 @@ namespace MuMech
                 }
             }
 
-            tractionLimit = (double)Mathf.Clamp((float)tractionLimit, 0, 100);
+            // set the value, not a new object: the Traction Brake Limit field edits this one
+            double brakeLimit = Math.Max(0, Math.Min(100, tractionLimit.Val));
+            if (brakeLimit != tractionLimit.Val) tractionLimit.Val = brakeLimit;
             Vessel.ActionGroups.SetGroup(KSPActionGroup.Brakes,
                 brake && (StabilityControl && (ControlHeading || ControlSpeed) ? traction >= tractionLimit : true));
             // only let go of the brake when losing traction if the AP is driving, otherwise assume the player knows when to let go of it
@@ -481,10 +492,16 @@ namespace MuMech
             speedPID.Ki = sPIDi;
             speedPID.Kd = sPIDd;
 
-            if (lastETA + 0.2 < DateTime.Now.TimeOfDay.TotalSeconds)
+            // the integral of the error is held to 1 deg*s for heading and 5 m for speed
+            headingPID.MaxIntegral = Math.Abs(hPIDi) * 1;
+            headingPID.MinIntegral = -headingPID.MaxIntegral;
+            speedPID.MaxIntegral = Math.Abs(sPIDi) * 5;
+            speedPID.MinIntegral = -speedPID.MaxIntegral;
+
+            if (lastETA + 0.2 < Time.realtimeSinceStartup)
             {
                 etaSpeed.Value = curSpeed;
-                lastETA = DateTime.Now.TimeOfDay.TotalSeconds;
+                lastETA = Time.realtimeSinceStartup;
             }
 
             if (!Core.GetComputerModule<MechJebModuleRoverWindow>().Enabled)

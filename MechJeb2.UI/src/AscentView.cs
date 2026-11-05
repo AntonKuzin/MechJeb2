@@ -95,11 +95,7 @@ namespace MuMech.UI
             psg = Settings.AscentType == AscentType.PSG;
             optimize = psg && Settings.OptimizeStageFlag;
             landed = HasVessel && Core.vessel.LandedOrSplashed;
-            if (psg)
-            {
-                Core.StageStats.RequestUpdate();
-                Core.StageStats.LiveSLT = true;
-            }
+            if (psg) Core.StageStats.RequestUpdate();
 
             if (landed) menu.ResetLaunchWithoutTarget();
             anyPlaneControl = menu._launchingWithAnyPlaneControl;
@@ -107,7 +103,7 @@ namespace MuMech.UI
             incDelta = HasVessel ? menu.InclinationBelowLatitude(menu.InclinationSetting) : 0;
         }
 
-        // "inc {0:F1}º below current latitude", formatted only when the shown tenth changes
+        // "inc {0:F1}° below current latitude", formatted only when the shown tenth changes
         long deltaKey = long.MinValue;
         string deltaText;
 
@@ -250,7 +246,7 @@ namespace MuMech.UI
             // the edited setting is the PSG one or the classic one
             EditFields.Field(w, inc, () => menu.InclinationSetting.Text, s => menu.InclinationSetting.Text = s, 75,
                 () => menu.InclinationSetting.IsParsed);
-            KodeWindow.Label(inc, "º");
+            KodeWindow.Label(inc, "°");
             UIButton current = KodeWindow.Button(inc, "#MechJeb_Ascent_button13", () => menu.SetInclinationToLatitude(menu.InclinationSetting)); //Current
             Tooltips.Add(current.gameObject, MechJebModuleAscentMenu.InclinationCurrentTooltip);
 
@@ -335,7 +331,7 @@ namespace MuMech.UI
             w.Visible(countdown.gameObject, () => Core.Node != null && Core.Node.Autowarp);
 
             UIText invalid = AscentUi.ToneText(box, "#MechJeb_Ascent_warnInvalidTarget", Tone.Caution, true); // Target must be in the same sphere of influence. (OrangeLabel)
-            invalid.tmpText.enableWordWrapping = true;
+            KodeWindow.WrapToWidth(invalid);
             w.Visible(invalid.gameObject, () => !anyPlaneControl && !targetExists && Core.Target.NormalTargetExists);
             UIText select = KodeWindow.Label(box, "#MechJeb_Ascent_label34"); //Select a target for a timed launch.
             w.Visible(select.gameObject, () => !anyPlaneControl && !targetExists && !Core.Target.NormalTargetExists);
@@ -343,11 +339,11 @@ namespace MuMech.UI
             // nothing being launched: the launch buttons
             Layout idle = KodeWindow.Panel(box);
             w.Visible(idle.gameObject, () => !anyPlaneControl);
-            Layout plane = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_button15", menu.LaunchToPlaneOfTarget, Settings.LaunchLANDifference, "º", 40); //Launch into plane of target
+            Layout plane = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_button15", menu.LaunchToPlaneOfTarget, Settings.LaunchLANDifference, "°", 40); //Launch into plane of target
             w.Visible(plane.gameObject, () => targetExists);
-            Layout targetLan = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_LaunchToTargetLan", menu.LaunchToTargetLan, Settings.LaunchLANDifference, "º", 40); //Launch to target LAN
+            Layout targetLan = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_LaunchToTargetLan", menu.LaunchToTargetLan, Settings.LaunchLANDifference, "°", 40); //Launch to target LAN
             w.Visible(targetLan.gameObject, () => targetExists && psg);
-            Layout lan = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_LaunchToLan", menu.LaunchToLan, Psgs.LAN, "º", 40); //Launch to LAN
+            Layout lan = AscentUi.ButtonBox(w, idle, "#MechJeb_Ascent_LaunchToLan", menu.LaunchToLan, Psgs.LAN, "°", 40); //Launch to LAN
             w.Visible(lan.gameObject, () => psg);
             UnityEngine.UI.Toggle relative = w.Toggle(idle, "Use LAN relative to launch site", () => Settings.RelativeLAN, v => Settings.RelativeLAN = v);
             w.Visible(KodeWindow.RowOf(relative), () => psg);

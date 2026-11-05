@@ -36,6 +36,15 @@ namespace MuMech
         [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
         public bool RCSAdjustment = true;
 
+        // Drop the current stage just above the atmosphere, and aim for what will land, not what is flying now. For a capsule and its service stage.
+        [Persistent(pass = (int)(Pass.LOCAL | Pass.TYPE | Pass.GLOBAL))]
+        public bool JettisonBeforeEntry = false;
+
+        private bool _stageToDrop;
+
+        // the jettison has to happen at normal speed
+        public bool NearJettison => _stageToDrop && VesselState.AltitudeASL < MainBody.RealMaxAtmosphereAltitude() + 30000;
+
         // This is used to adjust the height at which the parachutes semi deploy as a means of
         // targeting the landing in an atmosphere where it is not possible to control atitude
         // to perform course correction burns.
@@ -64,7 +73,25 @@ namespace MuMech
         // We shouldn't try to use an ErrorPrediction until this is true.
         private bool _errorPredictionReady => _errorPrediction is { Outcome: ReentrySimulation.Outcome.LANDED };
 
-        private double _landingAltitude // The altitude above sea level of the terrain at the landing site
+        private double _landingAltitudeTime = -1;
+        private double _landingAltitudeCached;
+
+        // read about ten times per tick, and each read queries the terrain
+        private double _landingAltitude
+        {
+            get
+            {
+                if (_landingAltitudeTime != Time.fixedTime)
+                {
+                    _landingAltitudeCached = ComputeLandingAltitude;
+                    _landingAltitudeTime = Time.fixedTime;
+                }
+
+                return _landingAltitudeCached;
+            }
+        }
+
+        private double ComputeLandingAltitude // The altitude above sea level of the terrain at the landing site
         {
             get
             {
@@ -121,6 +148,7 @@ namespace MuMech
             Vessel.RemoveAllManeuverNodes(); // For the benefit of the landing predictions module
 
             _deployedGears = false;
+            _stageToDrop = JettisonBeforeEntry && MainBody.atmosphere && NextStageDropsParts();
 
             // Create a new parachute plan
             _parachutePlan = new ParachutePlan(this);
@@ -140,6 +168,7 @@ namespace MuMech
             Users.Add(controller);
 
             _deployedGears = false;
+            _stageToDrop = JettisonBeforeEntry && MainBody.atmosphere && NextStageDropsParts();
 
             // Create a new parachute plan
             _parachutePlan = new ParachutePlan(this);
@@ -167,9 +196,14 @@ namespace MuMech
 
             DescentSpeedPolicy = PickDescentSpeedPolicy();
 
-            _predictor.descentSpeedPolicy = PickDescentSpeedPolicy(); //create a separate IDescentSpeedPolicy object for the simulation
+            _predictor.dropStage = _stageToDrop ? Vessel.currentStage - 1 : -1;
+            _predictor.descentSpeedPolicy = DescentSpeedPolicy; // immutable, so the simulation can share it
             _predictor.decelEndAltitudeASL = DecelerationEndAltitude();
             _predictor.parachuteSemiDeployMultiplier = _parachutePlan.Multiplier;
+            _predictor.maxOrbits = 0.5;
+            _predictor.noSkipToFreefall = false;
+            _predictor.deployChutes = DeployChutes;
+            _predictor.limitChutesStage = LimitChutesStage;
 
             // Consider lowering the langing gear
             {
@@ -186,6 +220,7 @@ namespace MuMech
             _vesselAverageDrag = VesselAverageDrag();
             base.OnFixedUpdate();
             DeployParachutes();
+            JettisonIfDue();
         }
 
         protected override void OnModuleEnabled()
@@ -218,7 +253,10 @@ namespace MuMech
 
             // Seems we are already landed ?
             if (endRadius > Orbit.ApR || Vessel.LandedOrSplashed)
+            {
                 StopLanding();
+                return Vector3d.zero;
+            }
 
             Vector3d orbitLandingPosition = Orbit.WorldBCIPositionAtUT(
                 Orbit.PeR < endRadius ? Orbit.NextTimeOfRadius(VesselState.Time, endRadius) : Orbit.NextPeriapsisTime(VesselState.Time)
@@ -346,6 +384,34 @@ namespace MuMech
             }
         }
 
+        // The next stage could be anything: firing one that separates nothing could open the parachutes above the atmosphere.
+        private bool NextStageDropsParts()
+        {
+            int stage = Vessel.currentStage - 1;
+            bool drops = false, stays = false;
+            foreach (Part p in Vessel.parts)
+            {
+                if (p.IsDecoupledInStage(stage)) drops = true;
+                else if (p.isControlSource != Vessel.ControlLevel.NONE) stays = true;
+            }
+
+            return drops && stays;
+        }
+
+        private void JettisonIfDue()
+        {
+            if (!_stageToDrop || Orbit.PeA > 0 || VesselState.AltitudeASL > MainBody.RealMaxAtmosphereAltitude() + 4000)
+                return;
+
+            // still burning towards the target, or not at normal speed yet
+            if (Core.Thrust.TargetThrottle > 0 || !MuUtils.PhysicsRunning())
+                return;
+
+            _stageToDrop = false;
+            _predictor.dropStage = -1;
+            KSP.UI.Screens.StageManager.ActivateNextStage();
+        }
+
         private void DeployParachutes()
         {
             if (!(MainBody.atmosphere && DeployChutes)) return;
@@ -469,7 +535,7 @@ namespace MuMech
                 float partAreaDrag = 0;
                 for (int f = 0; f < 6; f++)
                 {
-                    partAreaDrag = p.DragCubes.WeightedDrag[f] *
+                    partAreaDrag += p.DragCubes.WeightedDrag[f] *
                         p.DragCubes.AreaOccluded[f]; // * PhysicsGlobals.DragCurveValue(0.5, machNumber) but I ll assume it is 1 for now
                 }
 
@@ -541,12 +607,6 @@ namespace MuMech
             return retVal;
         }
 
-        public void SetTargetKSC(MechJebCore controller)
-        {
-            Users.Add(controller);
-            Core.Target.SetPositionTarget(MainBody, MechJebModuleLandingGuidance.LandingSites[0].Latitude,
-                MechJebModuleLandingGuidance.LandingSites[0].Longitude);
-        }
     }
 
     //A descent speed policy that gives the max safe speed if our entire velocity were straight down

@@ -146,7 +146,7 @@ namespace MuMech.UI
         /// <summary>The locked-modules note and the "MechJeb" button on the screen edge (both layouts).</summary>
         void BuildEdge(KodeWindow w, UIObject r)
         {
-            UIText locked = KodeWindow.Paragraph(r, "#MechJeb_ModuleAreLocked"); //"Some modules are disabled until you unlock the proper node in the R&D tree or upgrade the tracking station."
+            UIText locked = GuidanceUi.Wrapped(r, "#MechJeb_ModuleAreLocked"); //"Some modules are disabled until you unlock the proper node in the R&D tree or upgrade the tracking station."
             w.Visible(locked.gameObject, () => Core.someModuleAreLocked);
 
             // the "MechJeb" button on the edge
@@ -160,6 +160,7 @@ namespace MuMech.UI
             button.gameObject.AddComponent<MenuButtonRightPress>().Menu = menu;
             buttonRect = button.rectTransform;
             buttonRect.anchorMin = buttonRect.anchorMax = buttonRect.pivot = new Vector2(0.5f, 0.5f);
+            buttonRect.sizeDelta = new Vector2(ButtonWidth, ButtonHeight); // like the text inside, it scales with the canvas
             w.Visible(button.gameObject, () => !menu.HideMenuButton);
         }
 
@@ -260,6 +261,7 @@ namespace MuMech.UI
             // IMGUI units (screen pixels / MechJeb scale) per local unit
             float k = root.lossyScale.x / scale;
             menu.SetMeasuredSize(root.rect.width * k, root.rect.height * k);
+            menu.SetButtonSize(ButtonWidth * k, ButtonHeight * k);
 
             // the panel: displayedPos, or just below the screen while hidden (like IMGUI's "so the mouse can't hover it")
             Rect pos = menu.windowStat == MechJebModuleMenu.WindowStat.HIDDEN
@@ -275,7 +277,6 @@ namespace MuMech.UI
             Rect box = vertical ? new Rect(bp.y, -bp.x - bp.width, bp.height, bp.width) : bp;
             var center = new Vector2((box.x + box.width * 0.5f) * scale, Screen.height - (box.y + box.height * 0.5f) * scale);
             RectTransformUtility.ScreenPointToWorldPointInRectangle(canvas, center, cam, out Vector3 world);
-            buttonRect.sizeDelta = new Vector2(ButtonWidth / k, ButtonHeight / k);
             buttonRect.position = world;
             buttonRect.localRotation = Quaternion.Euler(0, 0, vertical ? 90 : 0);
 
@@ -293,7 +294,6 @@ namespace MuMech.UI
         // ---- the Menu Position item of the Settings window ----
 
         static readonly string[] sideNames = Enum.GetNames(typeof(MechJebModuleMenu.WindowSide));
-        static readonly Dictionary<int, string> numbers = new Dictionary<int, string>();
 
         /// <summary>
         /// MechJebModuleMenu's "Menu Position" general info item (MenuPosition) for a KodeKit window: [side] [-] columns [+].
@@ -306,12 +306,7 @@ namespace MuMech.UI
             MiscViewKit.BoundButton(w, row, () => sideNames[(int)menu.windowSide], menu.CycleSide, null, true);
             KodeWindow.Label(row, "#MechJeb_MenuCol"); //Col
             KodeWindow.Button(row, "-", () => menu.columns = Math.Max(1, menu.columns - 1));
-            UIText count = w.BoundLabel(row, "99", () =>
-            {
-                int c = menu.columns;
-                if (!numbers.TryGetValue(c, out string s)) numbers[c] = s = c.ToString();
-                return s;
-            });
+            UIText count = w.BoundLabel(row, "99", () => InfoText.Int(menu.columns));
             // a label's cell leaves room for longer text, which two digits don't need: just wide enough, centred between the buttons
             count.tmpText.alignment = TextAlignmentOptions.Center;
             GameObject cell = KodeWindow.CellOf(count);

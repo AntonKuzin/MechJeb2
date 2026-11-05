@@ -45,22 +45,22 @@ namespace MuMech.UI
             else ClassicToolbar(parent);
 
             grid = KodeWindow.Row(parent);
-            grid.Spacing(0);
+            // columns at the top: a row's default centres them, so one shorter than the others would sit half a row lower
+            grid.Spacing(0).ChildAlignment(TextAnchor.UpperLeft);
             foreach (StageData d in MechJebStageStatsHelper.Columns)
                 columns.Add(BuildColumn(d));
 
             Refresh();
         }
 
-        // modern layout: the on/off options as chips that show their state, the display set as one choice
+        // modern layout: the on/off options as switches side by side, the display set as one choice
         void ModernToolbar(UIObject parent)
         {
             KodeWindow.Header(parent, "#MechJeb_InfoItems_label1"); //"Stage stats"
-            Layout chips = KodeWindow.FlowWrap(parent, 4);
-            Chip(chips, "s", () => h.TimeSeconds, h.ToggleTimeSeconds);
-            Chip(chips, CachedLocalizer.Instance.MechJebInfoItemsShowEmpty, () => h.ShowEmpty, h.ToggleShowEmpty);
-            Chip(chips, "RCS", () => h.ShowRcs, h.ToggleRcs);
-            if (!HighLogic.LoadedSceneIsEditor) Chip(chips, CachedLocalizer.Instance.MechJebInfoItemsButton5, () => h.LiveSLT, h.ToggleLiveSLT); //"Live SLT"
+            Layout switches = KodeWindow.FlowWrap(parent, 10);
+            Switch(switches, "#MechJeb_InfoItems_timeSeconds", () => h.TimeSeconds, h.ToggleTimeSeconds); //"Seconds"
+            Switch(switches, "#MechJeb_InfoItems_hideEmpty", () => !h.ShowEmpty, h.ToggleShowEmpty);   //"Hide 0"
+            Switch(switches, "#MechJeb_InfoItems_rcs", () => h.ShowRcs, h.ToggleRcs);                  //"RCS"
             w.Segmented(parent, MechJebStageStatsHelper.DisplayStateNames, () => h.DisplayState, i =>
             {
                 // the helper only cycles: step to the chosen set
@@ -70,8 +70,8 @@ namespace MuMech.UI
             if (HighLogic.LoadedSceneIsEditor) EditorEnvironment(parent);
         }
 
-        void Chip(UIObject parent, string text, System.Func<bool> get, System.Action toggle) =>
-            w.Chip(parent, text, get, v =>
+        void Switch(UIObject parent, string text, System.Func<bool> get, System.Action toggle) =>
+            w.SwitchRow(parent, text, get, v =>
             {
                 if (v != get()) toggle();
                 Refresh();
@@ -85,12 +85,8 @@ namespace MuMech.UI
             ToolbarButton(bar, () => h.ShowEmpty ? CachedLocalizer.Instance.MechJebInfoItemsShowEmpty : CachedLocalizer.Instance.MechJebInfoItemsHideEmpty,
                 h.ToggleShowEmpty);
             ToolbarButton(bar, () => MechJebStageStatsHelper.DisplayStateNames[h.DisplayState], h.CycleDisplayState);
-            ToolbarButton(bar, () => h.ShowRcs ? "RCS" : "Engine", h.ToggleRcs);
-            if (!HighLogic.LoadedSceneIsEditor)
-                ToolbarButton(bar, () => h.LiveSLT ? CachedLocalizer.Instance.MechJebInfoItemsButton5 : CachedLocalizer.Instance.MechJebInfoItemsButton6,
-                    h.ToggleLiveSLT); //"Live SLT" "0Alt SLT"
-            else
-                EditorEnvironment(parent);
+            ToolbarButton(bar, () => h.ShowRcs ? CachedLocalizer.Instance.MechJebInfoItemsRcs : CachedLocalizer.Instance.MechJebInfoItemsEngine, h.ToggleRcs);
+            if (HighLogic.LoadedSceneIsEditor) EditorEnvironment(parent);
         }
 
         void ToolbarButton(UIObject parent, System.Func<string> text, System.Action onClick)
@@ -198,8 +194,10 @@ namespace MuMech.UI
         long Shape()
         {
             long s = h.ShowRcs ? 1 : 0;
-            foreach (StageData d in MechJebStageStatsHelper.Columns)
-                s = s * 2 + (h.IsVisible(d) ? 1 : 0);
+            // by index: a foreach over the IReadOnlyList would box its enumerator at each refresh
+            IReadOnlyList<StageData> all = MechJebStageStatsHelper.Columns;
+            for (int i = 0; i < all.Count; i++)
+                s = s * 2 + (h.IsVisible(all[i]) ? 1 : 0);
             return s;
         }
 
@@ -214,8 +212,8 @@ namespace MuMech.UI
             long shape = Shape();
             if (shape != builtShape || rows != builtRows)
             {
-                builtShape = shape;
-                builtRows = rows;
+                // TMP set up under an inactive parent misses Awake: build the cells once the window is shown
+                if (!grid.gameObject.activeInHierarchy) return;
                 foreach (Column c in columns)
                 {
                     bool visible = c.Id == StageData.KSPStage || h.IsVisible(c.Id);
@@ -236,6 +234,9 @@ namespace MuMech.UI
                         if (c.Cells[i].gameObject.activeSelf != on) c.Cells[i].gameObject.SetActive(on);
                     }
                 }
+                // only once every column has its cells: a rebuild that threw half way is tried again at the next refresh
+                builtShape = shape;
+                builtRows = rows;
             }
 
             // the modern layout highlights the stage that burns now and dims the units
@@ -251,6 +252,7 @@ namespace MuMech.UI
                     double v = h.Value(c.Id, row, gee, out int decimals, out string unit);
                     CharText ct = c.Chars[row].Clear();
                     if (decimals >= 0) ct.Append(v, decimals);
+                    else if (decimals == MechJebStageStatsHelper.SI) ct.AppendSI(v);
                     else if (h.TimeSeconds) ct.Append(v, 2).Append('s');
                     else
                     {

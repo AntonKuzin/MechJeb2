@@ -44,48 +44,6 @@ namespace MuMech
             MoveByMeter(ref targetController.targetLongitude, distance, asl, o);
         }
 
-        public override void DoParametersGUI(Orbit o, double UT, MechJebModuleTargetController targetController)
-        {
-            double asl = o.referenceBody.TerrainAltitude(targetController.targetLatitude, targetController.targetLongitude);
-
-            GUILayout.BeginVertical();
-
-            if (!targetController.PositionTargetExists)
-            {
-                targetController.SetPositionTarget(o.referenceBody, targetLatitude, targetLongitude);
-            }
-
-            GUILayout.Label(Localizer.Format("#MechJeb_stationary_label1")); //Target longitude:
-
-            GUILayout.BeginHorizontal();
-            targetController.targetLongitude.DrawEditGUI(EditableAngle.Direction.EW);
-
-            if (GUILayout.Button("◄"))
-            {
-                MoveByMeter(ref targetController.targetLongitude, -10, asl, o);
-            }
-
-            GUILayout.Label("10m");
-            if (GUILayout.Button("►"))
-            {
-                MoveByMeter(ref targetController.targetLongitude, 10, asl, o);
-            }
-
-            GUILayout.EndHorizontal();
-
-            if (targetController.targetBody != null)
-            {
-                GUILayout.Label(targetController.targetBody.GetExperimentBiomeSafe(targetController.targetLatitude, targetController.targetLongitude));
-            }
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_LandingGuidance_button2"))) targetController.PickPositionTargetOnMap(); //Pick target on map
-
-            targetLatitude = 0;
-            targetLongitude = targetController.targetLongitude;
-
-            GUILayout.EndVertical();
-        }
-
         protected override List<ManeuverParameters> MakeNodesImpl(Orbit o, double ut, MechJebModuleTargetController target)
         {
             double syncSMA = Math.Pow(o.referenceBody.gravParameter * Math.Pow(o.referenceBody.rotationPeriod / (2.0 * Math.PI), 2.0), 1.0 / 3.0);
@@ -95,19 +53,18 @@ namespace MuMech
                 throw new OperationException(Localizer.Format("#MechJeb_stationary_Exception1", o.referenceBody.displayName.LocalizeRemoveGender()));
             }
 
-            double currentBodyRotationRad = (o.referenceBody.rotationAngle + 360.0 * (ut / o.referenceBody.rotationPeriod)) * Math.PI / 180.0;
-
-            double targMNA = targetLongitude * Math.PI / 180.0 + currentBodyRotationRad;
-            targMNA = Clamp2Pi(targMNA);
+            // The orbit's epoch is ut, which is later when a node already exists: aim for the point above the target longitude
+            // then, which is the point above targetLongitude + turn now. On a 6 h day, a node an hour out turns it by 60 degrees,
+            // and a body that rotates retrograde has a negative rotationPeriod, so a negative turn.
+            double turn = 360 * (ut - Planetarium.GetUniversalTime()) / o.referenceBody.rotationPeriod;
             double syncAlt = syncSMA - o.referenceBody.Radius;
-            Vector3d targetWorldPos = o.referenceBody.GetWorldSurfacePosition(0, targetLongitude, syncAlt);
+            Vector3d targetWorldPos = o.referenceBody.GetWorldSurfacePosition(0, targetLongitude + turn, syncAlt);
             Vector3d radiusVector = targetWorldPos - o.referenceBody.position;
             double velMag = Math.Sqrt(o.referenceBody.gravParameter / syncSMA);
             Vector3d velDir = Vector3d.Cross(o.referenceBody.angularVelocity, radiusVector).normalized;
-            Vector3d targetVelocity = velDir * velMag;
 
-            var targOrbit = new Orbit();
-            targOrbit.UpdateFromStateVectors(radiusVector, targetVelocity, o.referenceBody, ut);
+            // world vectors, which OrbitFromStateVectors turns into the orbit's frame
+            Orbit targOrbit = MuUtils.OrbitFromStateVectors(targetWorldPos, velDir * velMag, o.referenceBody, ut);
             targOrbit.eccentricity = 0;
             targOrbit.inclination = 0;
             targOrbit.Init();

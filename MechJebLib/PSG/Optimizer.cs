@@ -26,7 +26,14 @@ namespace MechJebLib.PSG
         private readonly alglib.ndimensional_sjac _constraintHandle;
         private alglib.minnlcstate _state = new alglib.minnlcstate();
 
-        public CancellationToken TimeoutToken;
+        /// <summary>
+        ///     External cancellation (e.g. the owning job being stopped).  Unlike the per-run timeout this aborts Run() with an
+        ///     OperationCanceledException instead of returning null.
+        /// </summary>
+        public CancellationToken CancellationToken { get; set; }
+
+        // the per-run timeout linked with CancellationToken, checked on every constraint evaluation
+        public CancellationToken RunToken;
 
         public int Iterations;
         public int TerminationType;
@@ -35,6 +42,8 @@ namespace MechJebLib.PSG
         public double Cost;
         public Solution? Solution;
 
+        public const int DEFAULT_TIMEOUT = 120_000; // milliseconds
+
         public int    K                   => 3 * N + 1;
         public int    N                   { get; set; } = 7;
         public int    Maxits              { get; set; } = 4000;
@@ -42,7 +51,7 @@ namespace MechJebLib.PSG
         public double Epsf                { get; set; } = 1e-9;
         public double Diffstep            { get; set; } = 1e-9;
         public double Stpmax              { get; set; } = 10;
-        public int    OptimizerTimeout    { get; set; } = 120_000; // milliseconds
+        public int    OptimizerTimeout    { get; set; } = DEFAULT_TIMEOUT; // milliseconds, per Run()
         public double ZeroCoastTime       { get; set; } = 1; // seconds, minimum coast of a burn-coast-burn with a nonzero first burn
         public double ZeroCoastMu         { get; set; } = 1e-6;
 
@@ -517,7 +526,7 @@ namespace MechJebLib.PSG
             PrintDebug($"PrimalFeasibility: {PrimalFeasibility}");
 
             _vars.WrapVars(x);
-            Solution solution = new SolutionBuilder(N, _vars, Problem, Phases).Build();
+            Solution solution = new SolutionBuilder(N, _vars, Problem, Phases, _ascentProblem).Build();
 
             return solution;
         }
@@ -527,20 +536,24 @@ namespace MechJebLib.PSG
             foreach (Phase phase in Phases)
                 PrintDebug(phase.ToString());
 
+            using var runCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+            runCts.CancelAfter(OptimizerTimeout);
+            RunToken = runCts.Token;
+
             try
             {
-                var tokenSource = new CancellationTokenSource();
-                tokenSource.CancelAfter(OptimizerTimeout);
-                TimeoutToken = tokenSource.Token;
                 Solution = UnSafeRun();
                 return Solution;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (!CancellationToken.IsCancellationRequested)
             {
+                // timed out, return null so bootstrapping can fall back to the previous stage
             }
-            catch (alglib.alglibexception) when (TimeoutToken.IsCancellationRequested)
+            catch (alglib.alglibexception) when (RunToken.IsCancellationRequested)
             {
-                // ALGLIB rewraps the OperationCanceledException thrown from our callback as a "non-ALGLIB exception"
+                // ALGLIB rewraps the OperationCanceledException thrown from our callback as a "non-ALGLIB exception".  A
+                // timeout returns null, an external cancel aborts.
+                CancellationToken.ThrowIfCancellationRequested();
             }
             catch (alglib.alglibexception e)
             {

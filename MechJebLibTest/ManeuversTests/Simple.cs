@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using MechJebLib.Functions;
 using MechJebLib.Primitives;
+using MechJebLib.TwoBody;
 using Xunit;
 using static System.Math;
 using static MechJebLib.Utils.Statics;
@@ -41,6 +42,33 @@ namespace MechJebLibTest.ManeuversTests
             Astro.EccFromStateVectors(mu, r, v + dv).ShouldEqual(0, 1e-14);
             Astro.PeriapsisFromStateVectors(mu, r, v + dv).ShouldEqual(r.magnitude, 1e-7);
             Astro.ApoapsisFromStateVectors(mu, r, v + dv).ShouldEqual(r.magnitude, 1e-7);
+        }
+
+        // the burn is along the velocity and puts the apoapsis where asked, from 1 to 1e4 radii out, and does nothing below r
+        [Theory]
+        [MemberData(nameof(Seeds))]
+        public void DeltaVToChangeApoapsisProgradeTest(int seed)
+        {
+            var random = new Random(seed);
+
+            var r = new V3(4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2);
+            var v = new V3(4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2, 4 * random.NextDouble() - 2);
+            double newApR = r.magnitude * Pow(10, 4 * random.NextDouble());
+
+            double rscale = random.NextDouble() * 1.5e8 + 1;
+            double vscale = random.NextDouble() * 3e4 + 1;
+            r *= rscale;
+            v *= vscale;
+            newApR *= rscale;
+            double mu = rscale * vscale * vscale;
+
+            V3 dv = MechJebLib.Maneuvers.Simple.DeltaVToChangeApoapsisPrograde(mu, r, v, newApR);
+
+            Astro.ApoapsisFromStateVectors(mu, r, v + dv).ShouldEqual(newApR, 1e-9);
+            Assert.True(V3.Cross(dv, v).magnitude <= 1e-12 * dv.magnitude * v.magnitude);
+            Assert.True(V3.Dot(v + dv, v) > 0);
+
+            MechJebLib.Maneuvers.Simple.DeltaVToChangeApoapsisPrograde(mu, r, v, 0.5 * r.magnitude).ShouldEqual(V3.zero, 0);
         }
 
         [Theory]
@@ -151,6 +179,25 @@ namespace MechJebLibTest.ManeuversTests
             Assert.Equal(-v185 / Sqrt(2), dv.x, 9);
             Assert.Equal(0, dv.y, 9);
             Assert.Equal(v185 - v185 / Sqrt(2), dv.z, 9);
+        }
+
+        // after the coast the orbit is circular at the burn point, which is where the vessel is then, not where it started
+        [Theory]
+        [MemberData(nameof(Seeds))]
+        public void DeltaVToCircularizeAfterTimeTest(int seed)
+        {
+            var random = new Random(seed);
+
+            double ecc = 0.8 * random.NextDouble();
+            (V3 r, V3 v) = Astro.StateVectorsFromKeplerian(1.0, 1.0, ecc, PI * random.NextDouble(), TAU * random.NextDouble(),
+                TAU * random.NextDouble(), TAU * random.NextDouble());
+            double dt = 10 * random.NextDouble();
+
+            V3 dv = MechJebLib.Maneuvers.Simple.DeltaVToCircularizeAfterTime(1.0, r, v, dt);
+
+            (V3 r1, V3 v1) = Shepperd.Solve(1.0, dt, r, v);
+            Astro.EccFromStateVectors(1.0, r1, v1 + dv).ShouldEqual(0, 1e-9);
+            (v1 + dv).magnitude.ShouldEqual(Sqrt(1.0 / r1.magnitude), 1e-9);
         }
     }
 }

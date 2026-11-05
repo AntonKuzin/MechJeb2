@@ -102,6 +102,12 @@ namespace MuMech.UI
             KodeWindow.Button(top, "#MechJeb_WindowEd_button1", ed.AddNewWindow, true); //New window
             if (Edited != null) KodeWindow.Button(top, "#MechJeb_WindowEd_button2", ed.RemoveCurrentWindow, true); //Delete window
 
+            // sharing: the edited window's configuration to the clipboard, or a new window from it
+            Layout share = KodeWindow.Row(r);
+            if (Edited != null)
+                Tooltips.Add(KodeWindow.Button(share, "#MechJeb_NewUI_ExportWindow", ExportEdited, true).gameObject, "#MechJeb_NewUI_ExportWindow_tooltip"); //Export
+            Tooltips.Add(KodeWindow.Button(share, "#MechJeb_NewUI_ImportWindow", ImportFromClipboard, true).gameObject, "#MechJeb_NewUI_ImportWindow_tooltip"); //Import
+
             if (Edited != null) BuildEditedWindow(w, r);
 
             if (KodeWindow.ModernLayout)
@@ -133,6 +139,19 @@ namespace MuMech.UI
             KodeWindow.Button(presetRow, ">", () => ed.presetIndex = (ed.presetIndex + 1) % count);
         }
 
+        void ExportEdited()
+        {
+            MuUtils.SystemClipboard = Edited.ToSharingString();
+            ScreenMessages.PostScreenMessage(Localizer.Format("#MechJeb_WindowEd_CustomInfoWindow_Scrmsg1", Edited.GetName()), 3.0f,
+                ScreenMessageStyle.UPPER_RIGHT); //Configuration of <<1>> window copied to clipboard.
+        }
+
+        void ImportFromClipboard()
+        {
+            MechJebModuleCustomInfoWindow created = ed.CreateWindowFromSharingString(MuUtils.SystemClipboard);
+            if (created != null) ed.editedWindow = created;
+        }
+
         void CreateFromPreset()
         {
             MechJebModuleCustomInfoWindow created = ed.CreateWindowFromSharingString(CustomWindowPresets.presets[ed.presetIndex].sharingString);
@@ -143,6 +162,7 @@ namespace MuMech.UI
         static void TitleField(KodeWindow w, UIObject parent, MechJebModuleCustomInfoWindow edited) =>
             EditFields.Field(w, parent, () => edited.title, s =>
             {
+                s = MuUtils.SanitizeConfigText(s);
                 if (edited.title == s) return;
                 edited.title = s;
                 edited.Dirty = true;
@@ -197,6 +217,7 @@ namespace MuMech.UI
             Layout flags = KodeWindow.Row(r);
             w.Toggle(flags, "#MechJeb_WindowEd_checkbox3", () => edited.IsOverlay, v => edited.IsOverlay = v); //Overlay
             w.Toggle(flags, "#MechJeb_WindowEd_checkbox4", () => edited.WindowLocked, v => edited.WindowLocked = v); //Locked
+            Tooltips.Add(w.Toggle(flags, "#MechJeb_WindowEd_checkbox8", () => edited.ClickThrough, v => edited.ClickThrough = v).gameObject, "#MechJeb_WindowEd_checkbox8_tooltip"); //Click through
 
             // Compact: off, the new UI's global setting, or on, whichever that one is
             Layout compact = KodeWindow.Row(r);
@@ -206,6 +227,44 @@ namespace MuMech.UI
                 Localizer.Format("#MechJeb_NewUI_CompactOff"), Localizer.Format("#MechJeb_NewUI_CompactFollow"), Localizer.Format("#MechJeb_NewUI_CompactOn")
             };
             w.Switch3(compact, compactNames, () => (int)edited.Compact, v => edited.Compact = (MechJebModuleCustomInfoWindow.CompactMode)v);
+
+            // Width: Auto (fits the values) or Fixed, set with -10 -1 [field] px +1 +10 or the window's resize grip
+            Layout width = KodeWindow.Row(r);
+            Tooltips.Add(KodeWindow.Label(width, "#MechJeb_NewUI_Width", true).gameObject, "#MechJeb_NewUI_Width_tooltip"); //Width
+            string auto = Localizer.Format("#MechJeb_NewUI_WidthAuto"), fixedName = Localizer.Format("#MechJeb_NewUI_WidthFixed");
+            w.Switch(width, () => edited.WidthFixed, v => edited.WidthFixed = v);
+            w.BoundLabel(width, auto.Length > fixedName.Length ? auto : fixedName, () => edited.WidthFixed ? fixedName : auto);
+            void Nudge(int d)
+            {
+                edited.FixedWidth = (edited.FixedWidth > 0 ? edited.FixedWidth : 250) + d;
+                edited.WidthFixed = true;
+            }
+            KodeWindow.Button(width, "-10", () => Nudge(-10));
+            KodeWindow.Button(width, "-1", () => Nudge(-1));
+            // four digits at most (MAX_FIXED_WIDTH)
+            float digits = TextMeasure.Measure("0000", w.Behaviour.Theme).x + 10;
+            // the typed text stays until it is a width in range ("3" on the way to "320"); a nudge or the grip replaces it
+            string typed = null;
+            int seen = edited.FixedWidth;
+            EditFields.Field(w, width, () =>
+            {
+                if (edited.FixedWidth != seen)
+                {
+                    seen = edited.FixedWidth;
+                    typed = null;
+                }
+                return typed ?? (seen > 0 ? seen.ToString() : "");
+            }, s =>
+            {
+                typed = s;
+                if (!int.TryParse(s, out int v) || v < MechJebModuleCustomInfoWindow.MIN_FIXED_WIDTH || v > MechJebModuleCustomInfoWindow.MAX_FIXED_WIDTH)
+                    return;
+                edited.FixedWidth = seen = v;
+                edited.WidthFixed = true;
+            }, digits);
+            KodeWindow.Label(width, "px");
+            KodeWindow.Button(width, "+1", () => Nudge(1));
+            KodeWindow.Button(width, "+10", () => Nudge(10));
 
             // Color: [x] Text [x] Background (exclusive), with the picker under them
             Layout color = KodeWindow.Row(r);
@@ -255,7 +314,7 @@ namespace MuMech.UI
             foreach (InfoItem item in ed.ItemsOfCategory())
             {
                 InfoItem add = item;
-                KodeWindow.ListRow(registry, Localizer.Format(item.description), () => ed.AddItem(add));
+                KodeWindow.ListRow(registry, item.localizedDescription, () => ed.AddItem(add));
             }
         }
 

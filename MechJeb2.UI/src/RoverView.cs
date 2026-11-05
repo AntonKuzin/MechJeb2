@@ -44,7 +44,7 @@ namespace MuMech.UI
                 KodeWindow.Button(heading, "+", () => Ap.heading.Val += Alt ? 5 : 1).PreferredWidth(18);
             }
 
-            RoverUi.ValueRow(w, r, ed, "Value:RoverController.headingErr", () => Ap?.headingErr ?? 0, "-180.0 º");
+            RoverUi.ValueRow(w, r, ed, "Value:RoverController.headingErr", () => Ap?.headingErr ?? 0, "-180.0 °");
             RoverUi.ToggleRow(w, r, ed, "Toggle:RoverController.ControlSpeed", () => Ap != null && Ap.ControlSpeed);
             Layout speed = KodeWindow.ModernLayout
                 ? RoverUi.StepperRow(w, r, ed, "Editable:RoverController.speed", d => Ap.speed.Val += d)
@@ -198,9 +198,10 @@ namespace MuMech.UI
             bool si = format == ValueInfoItem.SI;
             int decimals = format.Length >= 2 && format[0] == 'F' && int.TryParse(format.Substring(1), out int d) ? d : -1;
             int sigFigs = item.SiSigFigs, maxPrecision = item.SiMaxPrecision;
+            double scale = item.Scale;
             w.AddSync(() =>
             {
-                double v = get();
+                double v = scale * get();
                 text.Clear();
                 if (si) text.AppendSI(v, sigFigs, maxPrecision).Append(units);
                 else if (decimals >= 0) text.Append(v, decimals).Append(' ').Append(units);

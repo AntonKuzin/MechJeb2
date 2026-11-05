@@ -17,7 +17,7 @@ namespace MuMech
     public class MechJebStageStatsHelper
     {
         private bool showStagedMass, showBurnedMass, showInitialMass, showFinalMass, showThrust, showVacInitialTWR, showAtmoInitialTWR;
-        private bool showAtmoMaxTWR, showVacMaxTWR, showAtmoDeltaV, showVacDeltaV, showTime, showISP, showEmpty, showRcs, timeSeconds, liveSLT;
+        private bool showAtmoMaxTWR, showVacMaxTWR, showAtmoDeltaV, showVacDeltaV, showTime, showISP, showEmpty, showRcs, timeSeconds;
         private bool showAtmoCumulativeDeltaV, showVacCumulativeDeltaV, showControllableMass, showRcsUllageTime;
         private int TWRBody;
         private float altSLTScale, machScale;
@@ -51,7 +51,6 @@ namespace MuMech
             showRcs = items.showRcs;
             showEmpty = items.showEmpty;
             timeSeconds = items.timeSeconds;
-            liveSLT = items.liveSLT;
             altSLTScale = items.altSLTScale;
             machScale = items.machScale;
             TWRBody = items.TWRBody;
@@ -80,7 +79,6 @@ namespace MuMech
         internal bool TimeSeconds => timeSeconds;
         internal bool ShowEmpty => showEmpty;
         internal bool ShowRcs => showRcs;
-        internal bool LiveSLT => liveSLT;
         internal int DisplayState => StageDisplayState;
         internal int TwrBody { get => TWRBody; set => TWRBody = infoItems.TWRBody = value; }
         internal float AltSLTScale { get => altSLTScale; set => altSLTScale = infoItems.altSLTScale = value; }
@@ -105,8 +103,6 @@ namespace MuMech
             SetVisibility(StageDisplayState);
         }
 
-        internal void ToggleLiveSLT() => liveSLT = infoItems.liveSLT = !liveSLT;
-
         /// <summary>Clicking a column header hides it and switches to the "Custom" display state.</summary>
         internal void HideColumn(StageData d)
         {
@@ -116,7 +112,7 @@ namespace MuMech
             SaveStageVisibility();
         }
 
-        /// <summary>Push the environment the stats are computed for (live SLT in flight; body, altitude and mach in the editor).</summary>
+        /// <summary>Push the environment the stats are computed for (the main body in flight; body, altitude and mach in the editor).</summary>
         internal void ApplyEnvironment()
         {
             if (HighLogic.LoadedSceneIsEditor)
@@ -126,10 +122,7 @@ namespace MuMech
                 stats.Mach = Math.Pow(machScale * 2, 3);
             }
             else
-            {
-                stats.LiveSLT = liveSLT;
                 stats.EditorBody = stats.MainBody;
-            }
         }
 
         internal double GeeASL => HighLogic.LoadedSceneIsEditor ? FlightGlobals.Bodies[TWRBody].GeeASL : stats.MainBody.GeeASL;
@@ -143,8 +136,11 @@ namespace MuMech
 
         /// <summary>
         /// The number shown in column d for the stage at position row of Stages, and how UpdateStageDisplayInfo formats it:
-        /// decimals ≥ 0 → "F{decimals}" + unit; -1 → a time (F2 + "s" with TimeSeconds, else DHMS with 1 decimal) + unit.
+        /// decimals ≥ 0 → "F{decimals}" + unit; -1 → a time (F2 + "s" with TimeSeconds, else DHMS with 1 decimal) + unit;
+        /// SI (-2) → ToSI() + unit.
         /// </summary>
+        internal const int SI = -2;
+
         internal double Value(StageData d, int row, double geeASL, out int decimals, out string unit)
         {
             int index = stages[row];
@@ -171,8 +167,8 @@ namespace MuMech
                     decimals = 3; unit = " t   ";
                     return _burnedMass(index);
                 case StageData.Thrust:
-                    decimals = 3; unit = " kN   ";
-                    return _thrust(index);
+                    decimals = SI; unit = "N   ";
+                    return 1000 * _thrust(index);
                 case StageData.VacInitialTWR: return _vacStartTWR(index, geeASL);
                 case StageData.VacMaxTWR: return _vacEndTWR(index, geeASL);
                 case StageData.AtmoInitialTWR: return _atmoStartTWR(index, geeASL);
@@ -340,7 +336,7 @@ namespace MuMech
                 if (stageVisibility[StageData.StagedMass]) stageDisplayInfo[StageData.StagedMass].Add($"{stats.AtmoStats[index].StagedMass:F3} t   ");
                 if (stageVisibility[StageData.BurnedMass])
                     stageDisplayInfo[StageData.BurnedMass].Add($"{_burnedMass(index):F3} t   ");
-                if (stageVisibility[StageData.Thrust]) stageDisplayInfo[StageData.Thrust].Add($"{_thrust(index):F3} kN   ");
+                if (stageVisibility[StageData.Thrust]) stageDisplayInfo[StageData.Thrust].Add($"{(1000 * _thrust(index)).ToSI()}N   ");
                 if (stageVisibility[StageData.VacInitialTWR])
                     stageDisplayInfo[StageData.VacInitialTWR].Add($"{_vacStartTWR(index, geeASL):F2}   ");
                 if (stageVisibility[StageData.VacMaxTWR]) stageDisplayInfo[StageData.VacMaxTWR].Add($"{_vacEndTWR(index, geeASL):F2}   ");
@@ -381,117 +377,6 @@ namespace MuMech
             stats.RequestUpdate();
             GatherStages(stages);
             UpdateStageDisplayInfo(stages, geeASL);
-        }
-
-        public void AllStageStats()
-        {
-            Profiler.BeginSample("AllStageStats.UI1");
-
-            GUILayout.BeginVertical();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(CachedLocalizer.Instance.MechJebInfoItemsLabel1); //"Stage stats"
-
-            if (GUILayout.Button(timeSeconds ? "s" : "dhms", GuiUtils.LayoutNoExpandWidth))
-                ToggleTimeSeconds();
-
-            if (GUILayout.Button(
-                    showEmpty ? CachedLocalizer.Instance.MechJebInfoItemsShowEmpty : CachedLocalizer.Instance.MechJebInfoItemsHideEmpty,
-                    GuiUtils.LayoutNoExpandWidth))
-                ToggleShowEmpty();
-
-            if (GUILayout.Button(StageDisplayStates[StageDisplayState], GuiUtils.LayoutNoExpandWidth))
-                CycleDisplayState();
-
-            if (GUILayout.Button(showRcs ? "RCS" : "Engine", GuiUtils.LayoutNoExpandWidth))
-                ToggleRcs();
-
-            if (!HighLogic.LoadedSceneIsEditor)
-            {
-                if (GUILayout.Button(
-                        liveSLT ? CachedLocalizer.Instance.MechJebInfoItemsButton5 : CachedLocalizer.Instance.MechJebInfoItemsButton6,
-                        GuiUtils.LayoutNoExpandWidth)) //"Live SLT" "0Alt SLT"
-                    ToggleLiveSLT();
-            }
-
-            GUILayout.EndHorizontal();
-
-            if (HighLogic.LoadedSceneIsEditor)
-            {
-                GUILayout.BeginHorizontal();
-
-                TwrBody = GuiUtils.ComboBox.Box(TWRBody, bodies, this, false);
-
-                GUILayout.BeginVertical();
-
-                GUILayout.BeginHorizontal();
-                AltSLTScale = GUILayout.HorizontalSlider(altSLTScale, 0, 1, GuiUtils.LayoutExpandWidth);
-                ApplyEnvironment();
-                GUILayout.Label(stats.AltSLT.ToSI() + "m", GuiUtils.LayoutWidth(80));
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                MachScale = GUILayout.HorizontalSlider(machScale, 0, 1, GuiUtils.LayoutExpandWidth);
-                ApplyEnvironment();
-                GUILayout.Label(stats.Mach.ToString("F1") + " M", GuiUtils.LayoutWidth(80));
-                GUILayout.EndHorizontal();
-
-                GUILayout.EndVertical();
-
-                GUILayout.EndHorizontal();
-            }
-            else
-                ApplyEnvironment();
-
-            Profiler.EndSample();
-
-            if (stats.HalfStageIndex != -1)
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label($"Half-stage index: {stats.HalfStageIndex}", GUILayout.Width(130));
-                GUILayout.Space(30);
-                GuiUtils.SimpleTextBox("End mass: ", stats.HalfStageEndMass, "kg");
-                GUILayout.EndHorizontal();
-            }
-
-            Profiler.BeginSample("AllStageStats.DrawColumns");
-
-            GUILayout.BeginHorizontal();
-            //DrawStageStatsColumn(CachedLocalizer.Instance.MechJeb_InfoItems_StatsColumn0, stages.Select(s => s.ToString()).ToList());
-
-            bool buttonNotPressed = true;
-            foreach (StageData info in AllStages)
-            {
-                if (stageVisibility[info])
-                    buttonNotPressed &= stageVisibility[info] = !DrawStageStatsColumn(stageHeaderData[info], stageDisplayInfo[info]);
-            }
-
-            stageVisibility[StageData.KSPStage] = true;
-
-            if (!buttonNotPressed)
-            {
-                StageDisplayState = 3;
-                SaveStageVisibility();
-            }
-
-            GUILayout.EndHorizontal();
-
-            GUILayout.EndVertical();
-            Profiler.EndSample();
-        }
-
-        private static GUIStyle _columnStyle;
-
-        public static GUIStyle ColumnStyle =>
-            _columnStyle ??= new GUIStyle(GuiUtils.YellowOnHover) { alignment = TextAnchor.MiddleRight, wordWrap = false, padding = new RectOffset(2, 2, 0, 0) };
-
-        private bool DrawStageStatsColumn(string header, in List<string> data)
-        {
-            GUILayout.BeginVertical();
-            bool ret = GUILayout.Button(header, ColumnStyle);
-            foreach (string datum in data) GUILayout.Label(datum, ColumnStyle);
-            GUILayout.EndVertical();
-            return ret;
         }
 
         private void LoadStageVisibility()

@@ -13,6 +13,11 @@ namespace MuMech
         [Persistent(pass = (int)Pass.GLOBAL)]
         public bool Autowarp = true;
 
+        // set by an autopilot that wants no warp for now, without changing the player's setting
+        public bool AutowarpInhibited;
+
+        private bool _autowarp => Autowarp && !AutowarpInhibited;
+
         // how many seconds before a burn to end warp (and start ullaging in RO)
         [Persistent(pass = (int)Pass.GLOBAL)]
         public readonly EditableDouble LeadTime = new EditableDouble(3);
@@ -75,6 +80,29 @@ namespace MuMech
                 ut -= halfBurnTIme; // already takes spoolup into account
 
             return GuiUtils.TimeToDHMS(ut - VesselState.Time);
+        }
+
+        // How long a half turn takes with the throttle closed, so without the engines' gimbals. The attitude controller
+        // turns at the higher of two seconds of its acceleration and a half turn in 120 s, which are its default limits.
+        public double FlipTime()
+        {
+            Vector3d torque = Vector3d.Max(VesselState.TorqueReactionWheel.Positive, VesselState.TorqueReactionWheel.Negative);
+            if (Vessel.ActionGroups[KSPActionGroup.RCS])
+                torque += Vector3d.Max(VesselState.RCSTorqueAvailable.Positive, VesselState.RCSTorqueAvailable.Negative);
+
+            double acceleration = Min(torque.x / VesselState.MoI.x, torque.z / VesselState.MoI.z);
+            if (acceleration <= 0)
+                return 0;
+
+            double rate = Max(2 * acceleration, PI / 120);
+            return PI / rate + rate / acceleration;
+        }
+
+        // How long before a node a burn of this size needs the executor to be on it
+        public double BurnLeadTime(double dV)
+        {
+            BurnTime(dV, out double halfBurnTime, out double _);
+            return halfBurnTime + LeadTime;
         }
 
         public void ExecuteOneNode(object controller)
@@ -198,6 +226,10 @@ namespace MuMech
                 return;
             }
 
+            // keep the dV used for the ignition time current while warping and aligning, not just in LEAD and BURN
+            if (!ReflectionUtils.IsLoadedPrincipia)
+                UpdateDvLeft();
+
             _direction = NextDirection();
 
             // note that in principia after our node disappears this value will change to -1
@@ -229,7 +261,7 @@ namespace MuMech
                 return States.LEAD;
 
             // if we're not warping at all, just constantly align to the burn
-            if (!Autowarp)
+            if (!_autowarp)
                 return States.ALIGNING;
 
             // if we keep within the warp alignment tolerance just warp all the way to IDLE
@@ -280,7 +312,7 @@ namespace MuMech
 
         private void TickAligning()
         {
-            if (Autowarp && !MuUtils.PhysicsRunning())
+            if (_autowarp && !MuUtils.PhysicsRunning())
             {
                 Core.Warp.MinimumWarp();
                 return;
@@ -494,9 +526,13 @@ namespace MuMech
                     {
                         // We staged again before autostagePreDelay is elapsed.
                         // Add the remaining wait time
+                        double delay = Core.Staging.AutostagePreDelay;
                         if (burnTime - lastStageBurnTime < Core.Staging.AutostagePreDelay && mjPhase != stats.VacStats.Count - 1)
-                            burnTime += Core.Staging.AutostagePreDelay - (burnTime - lastStageBurnTime);
-                        burnTime += Core.Staging.AutostagePreDelay;
+                            delay += Core.Staging.AutostagePreDelay - (burnTime - lastStageBurnTime);
+                        burnTime += delay;
+                        // the node is the middle of the burn: delays before it also move the ignition
+                        if (halfDvLeft > 0)
+                            halfBurnTime += delay;
                         lastStageBurnTime = burnTime;
                     }
 

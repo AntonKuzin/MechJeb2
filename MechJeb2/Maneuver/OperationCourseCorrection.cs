@@ -28,24 +28,6 @@ namespace MuMech
 
         internal static readonly TimeSelector _timeSelector = new TimeSelector(_timeReferences);
 
-        public override void DoParametersGUI(Orbit o, double universalTime, MechJebModuleTargetController target)
-        {
-            if (target.Target is CelestialBody)
-            {
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_approach_label1"), Periapsis, "km"); //Approximate final periapsis
-                GuiUtils.ToggledTextBox(ref InclinationFlag, "Inclination", Inclination, "°"); //Inclination
-            }
-            else
-            {
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_approach_label2"), InterceptDistance, "m"); //Closest approach distance
-            }
-
-            if (target.Target is CelestialBody)
-                _timeSelector.DoChooseTimeGUI();
-            else
-                GUILayout.Label(Localizer.Format("#MechJeb_approach_label3")); //Schedule the burn to minimize the required ΔV.
-        }
-
         protected override List<ManeuverParameters> MakeNodesImpl(Orbit o, double ut, MechJebModuleTargetController target)
         {
             if (!target.NormalTargetExists)
@@ -75,8 +57,8 @@ namespace MuMech
                     new OperationException(
                         Localizer.Format("#MechJeb_approach_Exception2")); //"target for course correction must be in the same sphere of influence"
 
-            if (o.NextClosestApproachTime(target.TargetOrbit, ut) < ut + 1 ||
-                o.NextClosestApproachDistance(target.TargetOrbit, ut) > target.TargetOrbit.semiMajorAxis * 0.2)
+            if (o.MinimumSeparationTime(target.TargetOrbit, ut) < ut + 1 ||
+                o.MinimumSeparationDistance(target.TargetOrbit, ut) > target.TargetOrbit.semiMajorAxis * 0.2)
             {
                 ErrorMessage = Localizer.Format(
                     "#MechJeb_Approach_errormsg"); //Warning: orbit before course correction doesn't seem to approach target very closely. Planned course correction may be extreme. Recommend plotting an approximate intercept orbit and then plotting a course correction.
@@ -109,6 +91,10 @@ namespace MuMech
 
                     ut = _timeSelector.ComputeManeuverTime(o, ut, target);
                 }
+
+                // the solver coasts from the burn to the end of the patch, the encounter
+                if (!(ut < o.EndUT))
+                    throw new OperationException(Localizer.Format("#MechJeb_approach_Exception3")); //the burn would be after the encounter with the target.
 
                 double dt = _timeSelector.TimeReference == TimeReference.COMPUTED ? double.NaN : 0;
                 double inc = InclinationFlag ? Inclination.Val : double.NaN;

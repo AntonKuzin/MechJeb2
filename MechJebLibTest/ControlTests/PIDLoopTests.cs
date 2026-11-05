@@ -236,5 +236,267 @@ namespace MechJebLibTest.ControlTests
             Assert.True(peakTime > 2.0 && peakTime < 3.0,
                 $"Peak time {peakTime:F2}s outside expected range [2.0s, 3.0s]. Expected ~2.38s");
         }
+
+        /// <summary>
+        ///     The RCS velocity loop: at a large error P alone saturates the output, and the integral must not wind up
+        ///     behind it.  Tracking anti-windup, with its time constant of Ti, does wind up.
+        /// </summary>
+        [Fact]
+        public void ConditionalIntegrationHoldsIntegralWhileSaturated()
+        {
+            const double TF = 1.0;
+            double kp = 0.53 / (3 * Sqrt(2) * TF * TF);
+            double ki = kp / (12 * Sqrt(2) * TF);
+
+            var conditional = new PIDLoop2
+            {
+                Kp = kp, Ki = ki, Ts = 0.02, MinOutput = -1, MaxOutput = 1, ConditionalIntegration = true
+            };
+            var tracking = new PIDLoop2 { Kp = kp, Ki = ki, Ts = 0.02, MinOutput = -1, MaxOutput = 1 };
+
+            for (int i = 0; i < 500; i++)
+            {
+                Assert.Equal(1.0, conditional.Update(20, 0), 12);
+                tracking.Update(20, 0);
+            }
+
+            Assert.Equal(0.0, conditional.ITerm, 12);
+            Assert.True(tracking.ITerm > 0.4, $"tracking ITerm {tracking.ITerm} should have wound up");
+        }
+
+        [Fact]
+        public void ConditionalIntegrationIntegratesInsideLimits()
+        {
+            var pid = new PIDLoop2 { Kp = 2.0, Ki = 1.0, Ts = 0.02, MinOutput = -10, MaxOutput = 10, ConditionalIntegration = true };
+
+            Assert.Equal(2.01, pid.Update(1, 0), 8);
+            Assert.Equal(2.03, pid.Update(1, 0), 8);
+            Assert.Equal(2.05, pid.Update(1, 0), 8);
+        }
+
+        /// <summary>
+        ///     The step to 0.05 would pass the limit, so the integral holds at 0.03 and the output sits at the limit, not one
+        ///     step inside it.
+        /// </summary>
+        [Fact]
+        public void ConditionalIntegrationReachesTheLimit()
+        {
+            var pid = new PIDLoop2 { Kp = 2.0, Ki = 1.0, Ts = 0.02, MinOutput = -2.04, MaxOutput = 2.04, ConditionalIntegration = true };
+
+            Assert.Equal(2.01, pid.Update(1, 0), 8);
+            Assert.Equal(2.03, pid.Update(1, 0), 8);
+
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.Equal(2.04, pid.Update(1, 0), 8);
+                Assert.Equal(0.03, pid.ITerm, 8);
+            }
+        }
+
+        /// <summary>
+        ///     P alone is past the limit before the deadband, but not after it, so the integral runs until the output
+        ///     itself saturates.
+        /// </summary>
+        [Fact]
+        public void ConditionalIntegrationSeesTheOutputDeadband()
+        {
+            var pid = new PIDLoop2
+            {
+                Kp = 2.0, Ki = 1.0, Ts = 0.02, MinOutput = -1.6, MaxOutput = 1.6, OutputDeadband = 0.5, ConditionalIntegration = true
+            };
+
+            Assert.Equal(1.51, pid.Update(1, 0), 8);
+            Assert.Equal(1.53, pid.Update(1, 0), 8);
+            Assert.Equal(1.55, pid.Update(1, 0), 8);
+            Assert.Equal(1.57, pid.Update(1, 0), 8);
+            Assert.Equal(1.59, pid.Update(1, 0), 8);
+
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.Equal(1.6, pid.Update(1, 0), 8);
+                Assert.Equal(0.09, pid.ITerm, 8);
+            }
+        }
+
+        /// <summary>
+        ///     The step to 0.05 would pass the output limit, but MaxIntegral cuts it to 0.04, which doesn't, so it's kept.
+        /// </summary>
+        [Fact]
+        public void ConditionalIntegrationSeesTheIntegralLimits()
+        {
+            var pid = new PIDLoop2
+            {
+                Kp = 2.0, Ki = 1.0, Ts = 0.02, MinOutput = -2.045, MaxOutput = 2.045, MinIntegral = -0.04, MaxIntegral = 0.04,
+                ConditionalIntegration = true
+            };
+
+            Assert.Equal(2.01, pid.Update(1, 0), 8);
+            Assert.Equal(2.03, pid.Update(1, 0), 8);
+
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.Equal(2.04, pid.Update(1, 0), 8);
+                Assert.Equal(0.04, pid.ITerm, 8);
+            }
+        }
+
+        /// <summary>
+        ///     Velocity steps on the PIDLoop2 that PIDControllerV2 runs for MechJebModuleRCSController.
+        /// </summary>
+        [Theory]
+        [InlineData(0.3, 1.0)] // audit item CTRL-10: 7.3 cm/s of overshoot, and still 3 cm/s off after 20 s
+        [InlineData(0.1, 1.0)] // a long saturation, the integral would pass 1
+        [InlineData(1.0, 2.0)]
+        [InlineData(3.0, 5.0)] // the integral peaks near 0.5 here, so limiting it to the output range would never act
+        public void ConditionalIntegrationVelocityStepDoesNotOvershoot(double accel, double dv)
+        {
+            (double overshoot, double after20) = RcsVelocityStep(RcsLoop(true), accel, dv);
+
+            Assert.True(overshoot < 0.005, $"overshoot {overshoot} m/s");
+            Assert.True(Abs(after20) < 0.01, $"{after20} m/s left after 20 s");
+        }
+
+        [Fact]
+        public void ConditionalIntegrationWorksThroughTheThrustFloor()
+        {
+            // proportional alone is 3 %, under the 5 % ModuleRCS needs to fire, so only the integral can remove this error
+            (_, double after20) = RcsVelocityStep(RcsLoop(true), 1.0, 0.005);
+
+            Assert.True(Abs(after20) < 0.004, $"{after20} m/s left after 20 s");
+        }
+
+        /// <summary>
+        ///     Why PIDControllerBase sets ConditionalIntegration: P alone saturates this loop for the whole step, and
+        ///     tracking lets the integral relax toward the output limit with a time constant of Ti (17 s here).  All of it
+        ///     unwinds past zero: 2.6 cm/s, against none for conditional integration.
+        /// </summary>
+        [Fact]
+        public void TrackingVelocityStepOvershoots()
+        {
+            (double overshoot, _) = RcsVelocityStep(RcsLoop(false), 3.0, 5.0);
+
+            Assert.True(overshoot > 0.01, $"overshoot {overshoot} m/s");
+        }
+
+        /// <summary>
+        ///     MechJebModuleRCSController's loop at Tf 1, set up as PIDControllerBase.Configure sets it up (Kd is 0).
+        /// </summary>
+        private static PIDLoop2 RcsLoop(bool conditionalIntegration)
+        {
+            const double TF = 1.0;
+            double kp = 0.53 / (3 * Sqrt(2) * TF * TF);
+
+            // Kp first: the Ki setter scales by the current K
+            return new PIDLoop2
+            {
+                Ts = 0.02, Kp = kp, Ki = kp / (12 * Sqrt(2) * TF), MinOutput = -1, MaxOutput = 1,
+                ConditionalIntegration = conditionalIntegration
+            };
+        }
+
+        /// <summary>
+        ///     One rigid axis, with the error in ticks of full thrust, and ModuleRCS's 5 % floor and one tick of delay on
+        ///     the output.
+        /// </summary>
+        /// <returns>the largest velocity reached past zero, and the velocity after 20 s</returns>
+        private static (double overshoot, double after20) RcsVelocityStep(PIDLoop2 pid, double accel, double dv)
+        {
+            const int TICKS = 1000;
+
+            double v = dv, pending = 0, overshoot = 0;
+
+            for (int i = 0; i < TICKS; i++)
+            {
+                double applied = Abs(pending) < 0.05 ? 0 : pending;
+                pending = pid.Update(v / (accel * pid.Ts), 0);
+
+                v -= applied * accel * pid.Ts;
+                overshoot = Max(overshoot, -v);
+            }
+
+            return (overshoot, v);
+        }
+
+        [Fact]
+        public void IntegralLimits()
+        {
+            var pid = new PIDLoop2 { Kp = 2.0, Ki = 1.0, Ts = 0.02, MinIntegral = -0.05, MaxIntegral = 0.05 };
+
+            Assert.Equal(2.01, pid.Update(1, 0), 8);
+            Assert.Equal(2.03, pid.Update(1, 0), 8);
+            Assert.Equal(2.05, pid.Update(1, 0), 8);
+            Assert.Equal(2.05, pid.Update(1, 0), 8);
+            Assert.Equal(0.05, pid.ITerm, 12);
+
+            for (int i = 0; i < 100; i++)
+                pid.Update(-1, 0);
+
+            Assert.Equal(-0.05, pid.ITerm, 12);
+        }
+
+        /// <summary>
+        ///     With Td == 0 the derivative recursion has its pole at -1, so a DTerm left from an earlier Td must be
+        ///     dropped rather than flipping sign forever.
+        /// </summary>
+        [Fact]
+        public void DerivativeTurnedOffMidRun()
+        {
+            var pid = new PIDLoop2 { Kp = 1.0, Kd = 0.1, Ts = 0.02 };
+
+            for (int i = 0; i < 5; i++)
+                pid.Update(i, 0);
+
+            Assert.NotEqual(0.0, pid.DTerm);
+
+            pid.Kd = 0;
+
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.Equal(5.0, pid.Update(5, 0), 12);
+                Assert.Equal(0.0, pid.DTerm);
+            }
+        }
+
+        [Fact]
+        public void IntegralOnly()
+        {
+            var pid = new PIDLoop2 { Kp = 0, Ki = 1.0, Ts = 0.02 };
+
+            Assert.Equal(1.0, pid.Ki, 12);
+            Assert.Equal(0.01, pid.Update(1, 0), 8);
+            Assert.Equal(0.03, pid.Update(1, 0), 8);
+            Assert.Equal(0.05, pid.Update(1, 0), 8);
+        }
+
+        [Fact]
+        public void DerivativeOnly()
+        {
+            var pid = new PIDLoop2 { Kp = 0, Kd = 0.1, Ts = 0.02 };
+            pid.Tf = 0.5 * pid.Ts;
+
+            Assert.Equal(0.1, pid.Kd, 12);
+            Assert.Equal(5.0, pid.Update(1, 0), 8);
+            Assert.Equal(0.0, pid.Update(1, 0), 8);
+        }
+
+        /// <summary>
+        ///     With Tf = Ts/2 the Tustin derivative's pole is at zero, and it is the plain difference Kd * (e - e1) / Ts.
+        /// </summary>
+        [Fact]
+        public void DerivativeWithHalfStepFilterIsPlainDifference()
+        {
+            var pid = new PIDLoop2 { Kp = 2.0, Ki = 0.1, Kd = 0.001, Ts = 0.02 };
+            pid.Tf = 0.5 * pid.Ts;
+
+            double[] errors = { 1, 1, 3, 3, 2 };
+            double e1 = 0;
+
+            foreach (double e in errors)
+            {
+                pid.Update(e, 0);
+                Assert.Equal(0.001 * (e - e1) / 0.02, pid.DTerm, 12);
+                e1 = e;
+            }
+        }
     }
 }

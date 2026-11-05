@@ -2,6 +2,7 @@ extern alias JetBrainsAnnotations;
 using System.Collections.Generic;
 using JetBrainsAnnotations::JetBrains.Annotations;
 using KSP.Localization;
+using static MechJebLib.Utils.Statics;
 using UnityEngine;
 
 namespace MuMech
@@ -21,13 +22,6 @@ namespace MuMech
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public bool InclinationFlag;
 
-        public override void DoParametersGUI(Orbit o, double universalTime, MechJebModuleTargetController target)
-        {
-            GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_return_label1"), Periapsis, "km"); //Approximate final periapsis:
-            GuiUtils.ToggledTextBox(ref InclinationFlag, "Inclination", Inclination, "°"); //Inclination
-            GUILayout.Label(Localizer.Format("#MechJeb_return_label2")); //Schedule the burn at the next return window.
-        }
-
         protected override List<ManeuverParameters> MakeNodesImpl(Orbit o, double universalTime, MechJebModuleTargetController target)
         {
             if (o.referenceBody.referenceBody == null)
@@ -37,6 +31,13 @@ namespace MuMech
             }
 
             double per = o.referenceBody.referenceBody.Radius + Periapsis;
+            // a periapsis at the centre has no scale for the solver
+            if (!(per > 0))
+            {
+                throw new OperationException(Localizer.Format("#MechJeb_Pe_Exception2", o.referenceBody.referenceBody.displayName.LocalizeRemoveGender()) +
+                    " (-" + o.referenceBody.referenceBody.Radius.ToSI(3) + "m)"); //new periapsis cannot be lower than minus the radius of <<1>>
+            }
+
             double inc = InclinationFlag ? Inclination.Val : double.NaN;
 
             (Vector3d dV, double ut) = OrbitalManeuverCalculator.DeltaVAndTimeForMoonReturnEjection(o, universalTime, per, inc);

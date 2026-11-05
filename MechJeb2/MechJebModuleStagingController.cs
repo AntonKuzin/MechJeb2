@@ -27,8 +27,15 @@ namespace MuMech
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableInt AutostageLimit = 0;
 
+        // each fairing jettison condition can be switched off, which skips that check entirely
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool FairingMaxDynamicPressureEnabled = true;
+
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult FairingMaxDynamicPressure = new EditableDoubleMult(5000, 1000);
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool FairingMinAltitudeEnabled = true;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult FairingMinAltitude = new EditableDoubleMult(50000, 1000);
@@ -37,6 +44,9 @@ namespace MuMech
         // the UI text box edits it as a percentage.
         [Persistent(pass = (int)Pass.TYPE)]
         public readonly EditableDoubleMult ClampAutoStageThrustPct = new EditableDoubleMult(0.99, 0.01);
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool FairingMaxAerothermalFluxEnabled = true;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult FairingMaxAerothermalFlux = new EditableDoubleMult(1135);
@@ -183,7 +193,7 @@ namespace MuMech
 
         protected override void OnModuleDisabled() => AutostagingOnce = false;
 
-        internal readonly string _sFairingMinDynamicPressure = $"  {CachedLocalizer.Instance.MechJebAscentLabel39} <";
+        internal readonly string _sFairingMaxDynamicPressure = $"  {CachedLocalizer.Instance.MechJebAscentLabel39} <";
         internal readonly string _sFairingMinAltitude = $"  {CachedLocalizer.Instance.MechJebAscentLabel40} >";
         internal readonly string _sFairingMaxAerothermalFlux = $"  {CachedLocalizer.Instance.MechJebAscentLabel41} <";
 
@@ -196,41 +206,7 @@ namespace MuMech
         internal readonly string _sLeadTime = $"{CachedLocalizer.Instance.MechJebAscentLeadTime}: ";
 
         [GeneralInfoItem("#MechJeb_AutostagingSettings", InfoItem.Category.Misc)] //Autostaging settings
-        public void AutostageSettingsInfoItem()
-        {
-            GUILayout.BeginVertical(GUI.skin.box);
-
-            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel42, AutostageLimit, width: 40); //"Stop at stage #"
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Delays: ");
-            GUILayout.Space(30);
-            GuiUtils.SimpleTextBox("pre: ", AutostagePreDelay, "s", 35, horizontalFraming: false);
-            GUILayout.FlexibleSpace();
-            GuiUtils.SimpleTextBox("post: ", AutostagePostDelay, "s", 35, horizontalFraming: false);
-            GUILayout.EndHorizontal();
-
-            ClampAutostageThrust();
-
-            GUILayout.Label(CachedLocalizer.Instance.MechJebAscentLabel38); //"Stage fairings when:"
-            GuiUtils.SimpleTextBox(_sFairingMinDynamicPressure, FairingMaxDynamicPressure, "kPa", 50); //"dynamic pressure"
-            GuiUtils.SimpleTextBox(_sFairingMinAltitude, FairingMinAltitude, "km", 50); //altitude
-            GuiUtils.SimpleTextBox(_sFairingMaxAerothermalFlux, FairingMaxAerothermalFlux, "W/m²", 50); //aerothermal flux
-
-            GUILayout.BeginHorizontal();
-            HotStaging = GUILayout.Toggle(HotStaging, CachedLocalizer.Instance.MechJebAscentHotStaging); //"Support hotstaging"
-            GUILayout.FlexibleSpace();
-            GuiUtils.SimpleTextBox(_sLeadTime, HotStagingLeadTime, "s", 35); //"lead time"
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            DropSolids = GUILayout.Toggle(DropSolids, CachedLocalizer.Instance.MechJebAscentDropSolids); //"Drop solids early"
-            GUILayout.FlexibleSpace();
-            GuiUtils.SimpleTextBox("", DropSolidsTwrPct, "% rocket accel", 35);
-            GUILayout.EndHorizontal();
-
-            GUILayout.EndVertical();
-        }
+        public void AutostageSettingsInfoItem() { }
 
         [ValueInfoItem("#MechJeb_Autostagingstatus", InfoItem.Category.Misc)] //Autostaging status
         public string AutostageStatus()
@@ -241,11 +217,7 @@ namespace MuMech
         }
 
         [GeneralInfoItem("#MechJeb_ClampAutostageThrust", InfoItem.Category.Misc)] //Clamp Autostage Thrust
-        private void ClampAutostageThrust()
-        {
-            GuiUtils.SimpleTextBox(CachedLocalizer.Instance.MechJebAscentLabel44, ClampAutoStageThrustPct, "%", 50); //"Clamp AutoStage Thrust "
-            ClampAutostageThrustValue();
-        }
+        private void ClampAutostageThrust() { }
 
         /// <summary>Keep ClampAutoStageThrustPct in [0, 1] (done after each edit, by both UIs).</summary>
         internal void ClampAutostageThrustValue()
@@ -379,17 +351,17 @@ namespace MuMech
                 return false;
             }
 
-            if (Core.VesselState.DynamicPressure > FairingMaxDynamicPressure)
+            if (FairingMaxDynamicPressureEnabled && Core.VesselState.DynamicPressure > FairingMaxDynamicPressure)
             {
                 return true;
             }
 
-            if (Core.VesselState.AltitudeASL < FairingMinAltitude)
+            if (FairingMinAltitudeEnabled && Core.VesselState.AltitudeASL < FairingMinAltitude)
             {
                 return true;
             }
 
-            if (Core.VesselState.FreeMolecularAerothermalFlux > FairingMaxAerothermalFlux)
+            if (FairingMaxAerothermalFluxEnabled && Core.VesselState.FreeMolecularAerothermalFlux > FairingMaxAerothermalFlux)
             {
                 return true;
             }

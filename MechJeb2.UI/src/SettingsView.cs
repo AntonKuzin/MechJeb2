@@ -93,15 +93,26 @@ namespace MuMech.UI
             KodeWindow.Header(r, "#MechJeb_MenuHeader", true); //Menu
             MenuView.BuildMenuPosition(w, r, menu);
 
+            // how long the menu takes to slide open or closed
+            Layout anim = KodeWindow.Row(r);
+            KodeWindow.Label(anim, "#MechJeb_MenuAnimationTime");
+            w.Slider(anim, () => settings.MenuAnimationTime, v => settings.MenuAnimationTime = Mathf.Round(v * 20) / 20, 0f, 1f);
+            float shownTime = -1;
+            string timeText = "";
+            w.BoundLabel(anim, () =>
+            {
+                if (settings.MenuAnimationTime != shownTime)
+                {
+                    shownTime = settings.MenuAnimationTime;
+                    timeText = shownTime.ToString("0.00") + " s";
+                }
+                return timeText;
+            }).transform.parent.GetComponent<UnityEngine.UI.LayoutElement>().preferredWidth = 40;
+            Tooltips.Add(anim.gameObject, "How long the MechJeb menu takes to slide open or closed. 0 opens it at once.");
+
             RoverUi.ToggleRow(w, r, editor, "Toggle:Settings.RssMode");
 
             w.Toggle(r, "#MechJeb_Settings_checkbox2", () => Core.Warp.activateSASOnWarp, v => Core.Warp.activateSASOnWarp = v); //"Activate SAS on Warp"
-
-            w.Toggle(r, "#MechJeb_NewUI_UseNewUI", () => settings.Backend == MechJebModuleSettings.UiBackendType.Kode, v =>
-            {
-                settings.UiBackend = (int)(v ? MechJebModuleSettings.UiBackendType.Kode : MechJebModuleSettings.UiBackendType.Imgui);
-                Changed();
-            });
 
             // the new UI's window opacity (KodeHost applies it to the theme)
             Layout opacity = KodeWindow.Row(r);

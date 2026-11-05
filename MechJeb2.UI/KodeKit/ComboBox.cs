@@ -21,6 +21,7 @@ namespace KodeKit
         readonly Func<int> get;
         readonly Action<int> set;
         readonly Func<string[]> entries;
+        readonly Func<int, Color> dots;
         public readonly UIButton Button;
         readonly TMP_Text label;
         GameObject popup;
@@ -30,13 +31,18 @@ namespace KodeKit
         public RectTransform PopupList => list;
         public GameObject Blocker { get; private set; }
 
+        /// <summary>The open list's scroll view when it is too tall for the screen (null otherwise).</summary>
+        public ScrollRect Scroll { get; private set; }
+
         static string Arrow(TMP_Text t) => t.font != null && t.font.HasCharacter('↓') ? "↓" : "v";
 
-        public ComboBox(KodeWindow w, UIObject parent, Func<int> get, Action<int> set, Func<string[]> entries, bool flexible = true)
+        /// <param name="dots">Each entry's colour, as a dot before its text in the button and the popup (the arrow selector shows the text alone).</param>
+        public ComboBox(KodeWindow w, UIObject parent, Func<int> get, Action<int> set, Func<string[]> entries, bool flexible = true, Func<int, Color> dots = null)
         {
             this.get = get;
             this.set = w.Edits(set);
             this.entries = entries;
+            this.dots = dots;
             Button = KodeWindow.Button(parent, "", Toggle, flexible);
             label = Button.GetComponentInChildren<TMP_Text>();
 
@@ -65,6 +71,9 @@ namespace KodeKit
                 caret.color = th.Text;
             });
 
+            Color dotColor = Color.white;
+            Image dot = dots != null ? Dot(Button, () => dotColor) : null;
+
             string shown = null;
             w.AddSync(() =>
             {
@@ -74,6 +83,9 @@ namespace KodeKit
                 if (s == shown) return;
                 shown = s;
                 Button.Text(s);
+                if (dot == null || e.Length == 0) return;
+                dotColor = dots(i);
+                dot.color = dotColor;
             });
 
             // close with the owning window
@@ -101,15 +113,22 @@ namespace KodeKit
                 // a flexible label in a row that doesn't stretch gets no width at all: size it for the widest entry
                 GameObject cell = KodeWindow.CellOf(current);
                 var le = cell.GetComponent<UnityEngine.UI.LayoutElement>() ?? cell.AddComponent<UnityEngine.UI.LayoutElement>();
+                string[] fitted = null;
                 void FitWidest()
                 {
+                    fitted = this.entries();
                     float widest = 0;
-                    foreach (string e in this.entries())
+                    foreach (string e in fitted)
                         widest = Mathf.Max(widest, TextMeasure.Measure(e ?? "", KodeWindow.ThemeOf(arrows.gameObject)).x);
                     le.minWidth = le.preferredWidth = widest + 8;
                 }
                 FitWidest();
                 w.Behaviour.AddRestyle(FitWidest);
+                // a list that changes comes as a new array
+                w.AddSync(() =>
+                {
+                    if (this.entries() != fitted) FitWidest();
+                });
             }
             KodeWindow.Button(arrows, ">", () =>
             {
@@ -142,6 +161,21 @@ namespace KodeKit
             void OnDisable() => Combo?.Close();
         }
 
+        // the chips' colour dot; the restyle that repaints icons reads its colour again
+        static Image Dot(UIButton b, Func<Color> color)
+        {
+            Image dot = KodeWindow.AddIcon(b, Sprites.Circle, true);
+            dot.name = "Dot";
+            var le = dot.GetComponent<LayoutElement>();
+            b.Content.Spacing(4);
+            KodeWindow.Styled(dot.gameObject, th =>
+            {
+                le.minWidth = le.preferredWidth = le.minHeight = le.preferredHeight = Mathf.Round(th.FontSize * 0.6f);
+                dot.color = color();
+            });
+            return dot;
+        }
+
         void Toggle()
         {
             if (IsOpen) Close();
@@ -153,21 +187,21 @@ namespace KodeKit
             Open?.Close();
             Open = this;
 
-            Canvas app = UIMasterController.Instance.appCanvas;
-            var canvasRt = (RectTransform)app.transform;
+            Canvas root = Overlay.Root;
+            var canvasRt = (RectTransform)root.transform;
 
             // must be on the UI layer: UIMainCamera culls other layers (raycasts still work, so this fails silently)
-            popup = new GameObject("ComboPopup", typeof(RectTransform)) { layer = app.gameObject.layer };
+            popup = new GameObject("ComboPopup", typeof(RectTransform)) { layer = root.gameObject.layer };
             var rt = (RectTransform)popup.transform;
             rt.SetParent(canvasRt, false);
             rt.anchorMin = Vector2.zero;
             rt.anchorMax = Vector2.one;
             rt.offsetMin = rt.offsetMax = Vector2.zero;
-            Overlay.Setup(popup.AddComponent<Canvas>(), app, 100);
+            Overlay.Setup(popup.AddComponent<Canvas>(), root, 100);
             popup.AddComponent<GraphicRaycaster>();
 
             // full-screen transparent blocker: a click outside the list closes without a change
-            Blocker = new GameObject("Blocker", typeof(RectTransform)) { layer = app.gameObject.layer };
+            Blocker = new GameObject("Blocker", typeof(RectTransform)) { layer = root.gameObject.layer };
             var brt = (RectTransform)Blocker.transform;
             brt.SetParent(rt, false);
             brt.anchorMin = Vector2.zero;
@@ -186,6 +220,7 @@ namespace KodeKit
             panel.gameObject.AddComponent<WindowBehaviour>(); // click-through lock while hovered
 
             string[] e = entries();
+            var rows = new UIButton[e.Length];
             string lastGroup = null;
             for (int i = 0; i < e.Length; i++)
             {
@@ -193,9 +228,15 @@ namespace KodeKit
                 if (g != null && g != lastGroup) KodeWindow.Header(panel, g, true);
                 lastGroup = g;
                 int k = i;
-                UIButton b = KodeWindow.Button(panel, e[i], () => Select(k), true);
+                UIButton b = rows[i] = KodeWindow.Button(panel, e[i], () => Select(k), true);
                 b.GetComponentInChildren<TMP_Text>().alignment = TextAlignmentOptions.Left;
                 if (Group != null) b.Content.Padding(14, 6, 1, 1);
+                if (dots != null)
+                {
+                    Color color = dots(i);
+                    Dot(b, () => color);
+                    b.Content.ChildAlignment(TextAnchor.MiddleLeft);
+                }
             }
             panel.gameObject.AddComponent<LayoutElement>().minWidth = ((RectTransform)Button.transform).rect.width;
 
@@ -204,7 +245,56 @@ namespace KodeKit
             list.localScale = new Vector3(scale, scale, 1);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(list);
+            float maxHeight = MaxListHeight() / scale;
+            if (list.rect.height > maxHeight) ScrollRows(panel, maxHeight, rows);
             PlaceUnderButton();
+        }
+
+        /// <summary>
+        /// The tallest list that fits on screen, in canvas units: the room below the button or above it, whichever is larger
+        /// (PlaceUnderButton flips the list above when it does not fit below).
+        /// </summary>
+        float MaxListHeight()
+        {
+            var corners = new Vector3[4];
+            ((RectTransform)Button.transform).GetWorldCorners(corners); // 0 = bottom-left, 1 = top-left
+            var parent = (RectTransform)list.parent;
+            Rect p = parent.rect;
+            float below = parent.InverseTransformPoint(corners[0]).y - p.yMin;
+            float above = p.yMax - parent.InverseTransformPoint(corners[1]).y;
+            const float margin = 8;
+            return Mathf.Max(Mathf.Max(below, above) - margin, Mathf.Min(200, p.height));
+        }
+
+        /// <summary>
+        /// A list too tall for the screen (a planet pack's bodies, #1583): its rows move into a scroll view of the given
+        /// height, as wide as the rows were, scrolled to the selected entry.
+        /// </summary>
+        void ScrollRows(LayoutPanel panel, float height, UIButton[] rows)
+        {
+            float width = list.rect.width;
+            var children = new List<Transform>();
+            foreach (Transform t in panel.transform) children.Add(t);
+
+            ScrollView sv = KodeWindow.ScrollList(panel, height, out Layout content, 1);
+            sv.BackgroundColor(Color.clear); // the panel already has the window look
+            var le = sv.GetComponent<LayoutElement>() ?? sv.gameObject.AddComponent<LayoutElement>();
+            le.preferredWidth = width + 12; // ScrollRect reports no width of its own; 12 = the scrollbar's room
+            foreach (Transform t in children) t.SetParent(content.transform, false);
+            Scroll = sv.ScrollRect;
+            // the content first: the list's rebuild stops at the viewport, which is no layout element, so the rows would
+            // have no positions yet and the content no height
+            LayoutRebuilder.ForceRebuildLayoutImmediate(content.rectTransform);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(list);
+
+            int selected = get();
+            if (selected < 0 || selected >= rows.Length) return;
+            var row = (RectTransform)rows[selected].transform;
+            RectTransform c = content.rectTransform;
+            float viewport = sv.ScrollRect.viewport.rect.height;
+            float top = -(row.localPosition.y + row.rect.yMax); // from the content's top, which is its pivot
+            float y = Mathf.Clamp(top - (viewport - row.rect.height) / 2, 0, Mathf.Max(0, c.rect.height - viewport));
+            c.anchoredPosition = new Vector2(c.anchoredPosition.x, y);
         }
 
         void PlaceUnderButton()
@@ -240,6 +330,7 @@ namespace KodeKit
             popup = null;
             list = null;
             Blocker = null;
+            Scroll = null;
             if (Open == this) Open = null;
         }
 

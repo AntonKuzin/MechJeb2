@@ -9,6 +9,7 @@ using System.Text;
 using MechJebLib.Functions;
 using MechJebLib.Interpolants;
 using MechJebLib.Primitives;
+using MechJebLib.Utils;
 using static MechJebLib.Utils.Statics;
 using static System.Math;
 
@@ -293,6 +294,16 @@ namespace MechJebLib.PSG
             return false;
         }
 
+        // true if we're in a coast, or the phase after the current one is a coast.  Unlike WillCoast this is false for a burn
+        // which is followed by other burns before the coast.
+        public bool CoastFollows(double t)
+        {
+            double tbar = (t - T0) / _timeScale;
+            int idx = IndexForTbar(tbar);
+
+            return Phases[idx].Coast || (idx + 1 < Phases.Count && Phases[idx + 1].Coast);
+        }
+
         public int CoastKSPStage()
         {
             for (int i = 0; i < Phases.Count; i++)
@@ -302,9 +313,18 @@ namespace MechJebLib.PSG
             return -1;
         }
 
-        public int TerminalKSPStage() => Phases[Phases.FindIndex(p => p.TerminalStage)].KSPStage;
+        public int TerminalKSPStage() => Phases[TerminalIndex()].KSPStage;
 
-        public int TerminalMJPhase() => Phases[Phases.FindIndex(p => p.TerminalStage)].MJPhase;
+        public int TerminalMJPhase() => Phases[TerminalIndex()].MJPhase;
+
+        // SolutionBuilder.AnalyzeStages always flags a terminal stage, so a Solution without one is a bug
+        // (AscentGuesser solutions skip AnalyzeStages and must not be asked)
+        private int TerminalIndex()
+        {
+            int idx = Phases.FindIndex(p => p.TerminalStage);
+            Check.True(idx >= 0, "Solution has no terminal stage");
+            return idx;
+        }
 
         // -1 if no stage needs a precise shutdown (e.g. all fixed burn time stages with no coast)
         public int OptimizeKSPStage()
@@ -335,7 +355,8 @@ namespace MechJebLib.PSG
             return (_tmax[phase] - tbar) * _timeScale;
         }
 
-        public (V3, double) InertialGuidance(double t)
+        // engineMinThrottle is the fraction of available thrust the engines currently produce at zero KSP throttle
+        public (V3, double) InertialGuidance(double t, double engineMinThrottle)
         {
             double tBar = (t - T0) / _timeScale;
 
@@ -343,10 +364,10 @@ namespace MechJebLib.PSG
             var x = InterpolantLayout.CreateFrom(xRaw);
             V3 u0 = x.U.normalized;
 
-            double thrustPct = x.T;
             int phase = IndexForTbar(tBar);
-            double minThrottle = Phases[phase].MinThrottle;
-            double kspThrottle = minThrottle < 1.0 ? (thrustPct - minThrottle) / (1.0 - minThrottle) : 1.0;
+            // don't command less than the optimizer's throttle floor if the interpolant dips between collocation points
+            double thrustPct = Clamp(x.T, Phases[phase].MinThrottle, 1.0);
+            double kspThrottle = engineMinThrottle < 1.0 ? (thrustPct - engineMinThrottle) / (1.0 - engineMinThrottle) : 1.0;
 
             return (u0, Clamp(kspThrottle, 0.01, 1.0));
         }
@@ -456,8 +477,9 @@ namespace MechJebLib.PSG
             {
                 int idx = IndexForTbar(tbar);
                 // back up to find an AllowShutdown stage if we've gone past the terminal time and
-                // hit a coast or a fixed burn time stage
-                while ((idx > 0 && !Phases[idx].AllowShutdown) || Phases[idx].Coast)
+                // hit a coast or a fixed burn time stage (the first phase may be a coast in a solution
+                // computed during the coast, so don't walk off the front)
+                while (idx > 0 && (!Phases[idx].AllowShutdown || Phases[idx].Coast))
                     idx--;
                 // go forward to the end of this multi-stage burn segment until we hit a coast or fixed stages
                 while (idx < Segments - 1 && Phases[idx].AllowShutdown && Phases[idx + 1].AllowShutdown && !Phases[idx + 1].Coast)

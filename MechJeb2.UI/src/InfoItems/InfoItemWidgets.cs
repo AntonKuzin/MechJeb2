@@ -190,26 +190,64 @@ namespace MuMech.UI
             ApplyColor(label.tmpText);
             ApplyColor(value.tmpText);
 
-            int widest = 0;
+            // a fixed-width window: the value takes the room the label leaves, on one line, and ends in "..." when it doesn't fit
+            bool fixedCell = FixedWidth && item.Width <= 0;
+            void FixCell()
+            {
+                size.minWidth = 0;
+                size.preferredWidth = 0;
+                size.flexibleWidth = 1;
+                label.GetComponent<LayoutElement>().flexibleWidth = 0; // or the label takes half the room
+                value.tmpText.enableWordWrapping = false;
+                value.tmpText.overflowMode = TextOverflowModes.Ellipsis;
+            }
+            if (fixedCell)
+            {
+                FixCell();
+                w.Behaviour.AddRestyle(FixCell);
+            }
+
+            int widest = 0, recent = 0;
+            float template = size.preferredWidth, shrinkAt = 0;
+            void Apply() => size.preferredWidth = Mathf.Max(template, TextMeasure.Measure(new string('0', widest), Theme.Current).x + 8);
             // a theme change re-sizes the cell from its template: re-apply the grown width at once, measured in the new theme
             w.Behaviour.AddRestyle(() =>
             {
-                if (item.Width > 0 || widest == 0) return;
-                float wanted = TextMeasure.Measure(new string('0', widest), Theme.Current).x + 8;
-                if (wanted > size.preferredWidth) size.preferredWidth = wanted;
+                if (fixedCell || item.Width > 0) return;
+                template = size.preferredWidth;
+                if (widest > 0) Apply();
             });
             void Grow(int length)
             {
-                // the value cell only grows, so changing numbers never re-lay out the window
-                if (item.Width > 0 || length <= widest) return;
-                widest = length;
-                float wanted = TextMeasure.Measure(new string('0', length), Theme.Current).x + 8;
-                if (wanted > size.preferredWidth) size.preferredWidth = wanted;
+                // the value cell grows at once and shrinks back only to the widest value of the last ShrinkDelay seconds, so
+                // changing numbers don't re-lay out the window every frame, yet a value that was briefly very long (a period
+                // in millions of years as the orbit passes e = 1, #2447) doesn't keep the window wide for good
+                if (fixedCell || item.Width > 0) return;
+                float now = Time.unscaledTime;
+                if (length > widest)
+                {
+                    widest = recent = length;
+                    shrinkAt = now + ShrinkDelay;
+                    Apply();
+                    return;
+                }
+                recent = Math.Max(recent, length);
+                if (now < shrinkAt) return;
+                shrinkAt = now + ShrinkDelay;
+                if (recent < widest)
+                {
+                    widest = recent;
+                    Apply();
+                }
+                recent = length;
             }
 
+            // a value cut off with "..." in a fixed-width window shows its whole text on hover
+            System.Func<string> fullText;
             if (native != null)
             {
                 var ct = new CharText(value.tmpText);
+                fullText = ct.ToString;
                 refresh.Add(() =>
                 {
                     Grow(native(ct.Clear()));
@@ -219,6 +257,7 @@ namespace MuMech.UI
             else if (chars)
             {
                 var ct = new CharText(value.tmpText);
+                fullText = ct.ToString;
                 refresh.Add(() =>
                 {
                     Format(ct.Clear(), item, number());
@@ -230,10 +269,12 @@ namespace MuMech.UI
             {
                 // strings, and numbers MechJeb formats with a .NET format CharText doesn't do: MechJeb's own string
                 string shown = first;
+                fullText = () => shown;
                 // IMGUI keeps the window's width and wraps a long value (biomes, orbit summaries): when the row would be wider
                 // than RowWidth, the cell keeps the room left by the label and grows in height instead of widening the window
                 void Fit(string s)
                 {
+                    if (fixedCell) return;
                     if (RowWidth <= 0 || item.Width > 0)
                     {
                         Grow(s?.Length ?? 0);
@@ -262,6 +303,7 @@ namespace MuMech.UI
                     value.tmpText.text = s;
                 });
             }
+            if (fixedCell && ValueTooltips) Tooltips.Add(value.gameObject, () => value.tmpText.isTextTruncated ? fullText() : null);
         }
 
         /// <summary>
@@ -269,6 +311,15 @@ namespace MuMech.UI
         /// wrap instead of widening the window. 0 = no limit.
         /// </summary>
         public float RowWidth;
+
+        /// <summary>Seconds a value cell keeps its width after its value got shorter.</summary>
+        const float ShrinkDelay = 5;
+
+        /// <summary>The window has a fixed width: value cells fill the room their label leaves and never resize the window.</summary>
+        public bool FixedWidth;
+
+        /// <summary>Cut-off values show their whole text on hover; off for an overlay, which must not catch the pointer.</summary>
+        public bool ValueTooltips = true;
 
         void ApplyColor(TMP_Text t)
         {
@@ -285,7 +336,6 @@ namespace MuMech.UI
             });
         }
 
-        /// <summary>The formats CharText reproduces exactly (see ValueInfoItem.GetStringValue).</summary>
         /// <summary>
         /// Items whose member returns a string MechJeb builds from numbers, written from those numbers without garbage. Same
         /// text as ValueInfoItem's ("{value} {units}", so a trailing space when there are no units). Returns the length of
@@ -325,6 +375,7 @@ namespace MuMech.UI
             return null;
         }
 
+        /// <summary>The formats CharText reproduces exactly (see ValueInfoItem.GetStringValue).</summary>
         static bool Formattable(ValueInfoItem item, out int decimals)
         {
             decimals = 0;
@@ -401,6 +452,8 @@ namespace MuMech.UI
             }
 
             object target = item.Target;
+            double scale = item.Scale;
+            if (scale != 1) return () => scale * g(target);
             return () => g(target);
         }
     }

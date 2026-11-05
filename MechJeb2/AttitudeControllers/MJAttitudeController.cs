@@ -1,7 +1,6 @@
 extern alias JetBrainsAnnotations;
 using System;
 using JetBrainsAnnotations::JetBrains.Annotations;
-using KSP.Localization;
 using UnityEngine;
 
 // ReSharper disable CompareOfFloatsByEqualityOperator
@@ -71,8 +70,12 @@ namespace MuMech.AttitudeControllers
             _pid = new PIDControllerV3(Vector3d.zero, Vector3d.zero, Vector3d.zero, 1, -1);
             SetPIDParameters();
             _lastAct = Vector3d.zero;
+            CopyToUi();
+        }
 
-
+        // the values the window edits, from the live ones
+        private void CopyToUi()
+        {
             _uiTfX = new EditableDouble(_tfV.x);
             _uiTfY = new EditableDouble(_tfV.y);
             _uiTfZ = new EditableDouble(_tfV.z);
@@ -94,6 +97,35 @@ namespace MuMech.AttitudeControllers
         {
             TfVec = _tfV;
             base.OnSave(local, type, global);
+        }
+
+        // The window edits copies of these values, and an edit reaches the controller here, as MechJeb2.UI's panel syncs
+        internal void ApplyUiValues()
+        {
+            if (!TfAutoTune)
+            {
+                if (_tfV.x != _uiTfX || _tfV.y != _uiTfY || _tfV.z != _uiTfZ)
+                {
+                    _tfV.x = _uiTfX;
+                    _tfV.y = _uiTfY;
+                    _tfV.z = _uiTfZ;
+                    SetPIDParameters();
+                }
+            }
+            else if (TfMin != _uiTfMin || TfMax != _uiTfMax)
+            {
+                TfMin = _uiTfMin;
+                TfMax = _uiTfMax;
+                SetPIDParameters();
+            }
+
+            if (KpFactor != _uiKpFactor || KiFactor != _uiKiFactor || KdFactor != _uiKdFactor)
+            {
+                KpFactor = _uiKpFactor;
+                KiFactor = _uiKiFactor;
+                KdFactor = _uiKdFactor;
+                SetPIDParameters();
+            }
         }
 
         private void SetPIDParameters()
@@ -144,6 +176,7 @@ namespace MuMech.AttitudeControllers
             KdFactor = 0.5;
             Deadband = 0.0001;
             KWlimit = 0.15;
+            CopyToUi();
         }
 
         public override void Reset() => _pid.Reset();
@@ -166,7 +199,7 @@ namespace MuMech.AttitudeControllers
             var normVec = Vector3.Cross(Ac.RequestedAttitude * Vector3.forward, vesselTransform.up);
             QuaternionD targetDeRotated = QuaternionD.AngleAxis((float)turnAngle, normVec) * Ac.RequestedAttitude;
             float rollError = Vector3.Angle(vesselTransform.right, targetDeRotated * Vector3.right) *
-                Math.Sign(Vector3.Dot(targetDeRotated * Vector3.right, vesselTransform.forward));
+                Mathf.Sign(Vector3.Dot(targetDeRotated * Vector3.right, vesselTransform.forward));
 
             // From here everything should use MOI order for Vectors (pitch, roll, yaw)
 
@@ -256,157 +289,56 @@ namespace MuMech.AttitudeControllers
 
         internal void SetLowPassFilter(bool newLowPassFilter)
         {
-            if (LowPassFilter != newLowPassFilter)
-            {
-                SetPIDParameters();
-                LowPassFilter = newLowPassFilter;
-            }
+            LowPassFilter = newLowPassFilter;
         }
 
-        public override void GUI()
+        // This is tightly coupled to the MJAttitudeController, and should not be used by other consumers.
+        private class PIDControllerV3
         {
-            if (GUILayout.Button(Localizer.Format("#MechJeb_adv_reset_button"))) //"Reset"
+            public Vector3d Kp, Ki, Kd, INTAccum, DerivativeAct, PropAct;
+            private readonly double _max;
+            private readonly double _min;
+
+            public PIDControllerV3(Vector3d kp, Vector3d ki, Vector3d kd, double max = double.MaxValue, double min = double.MinValue)
             {
-                ResetConfig();
+                Kp = kp;
+                Ki = ki;
+                Kd = kd;
+                _max = max;
+                _min = min;
+                Reset();
             }
 
-            TfAutoTune = GUILayout.Toggle(TfAutoTune, Localizer.Format("#MechJeb_AttitudeController_checkbox1")); //" Auto-tuning"
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(20);
-            GUILayout.BeginVertical();
-
-            if (!TfAutoTune)
+            public Vector3d Compute(Vector3d error, Vector3d omega, Vector3d wlimit)
             {
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label1")); //"Larger ship do better with a larger Tf"
+                DerivativeAct = Vector3d.Scale(omega, Kd);
+                wlimit = Vector3d.Scale(wlimit, Kd);
 
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label2"), GuiUtils.LayoutExpandWidth); //"Tf (s)"
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label3"), GuiUtils.LayoutNoExpandWidth); //"P"
-                _uiTfX.Text = GUILayout.TextField(_uiTfX.Text, GuiUtils.LayoutExpandWidth, GuiUtils.LayoutWidth(40));
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label4"), GuiUtils.LayoutNoExpandWidth); //"Y"
-                _uiTfY.Text = GUILayout.TextField(_uiTfY.Text, GuiUtils.LayoutExpandWidth, GuiUtils.LayoutWidth(40));
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label5"), GuiUtils.LayoutNoExpandWidth); //"R"
-                _uiTfZ.Text = GUILayout.TextField(_uiTfZ.Text, GuiUtils.LayoutExpandWidth, GuiUtils.LayoutWidth(40));
-                GUILayout.EndHorizontal();
+                // integral actíon + Anti Windup
+                INTAccum.x = Math.Abs(DerivativeAct.x) < 0.6 * _max ? INTAccum.x + error.x * Ki.x * TimeWarp.fixedDeltaTime : 0.9 * INTAccum.x;
+                INTAccum.y = Math.Abs(DerivativeAct.y) < 0.6 * _max ? INTAccum.y + error.y * Ki.y * TimeWarp.fixedDeltaTime : 0.9 * INTAccum.y;
+                INTAccum.z = Math.Abs(DerivativeAct.z) < 0.6 * _max ? INTAccum.z + error.z * Ki.z * TimeWarp.fixedDeltaTime : 0.9 * INTAccum.z;
 
-                ClampTf();
-            }
-            else
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label6"), GuiUtils.LayoutExpandWidth); //"Tf"
-                GUILayout.Label(MuUtils.PrettyPrint(_tfV), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
+                PropAct = Vector3d.Scale(error, Kp);
 
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label7"), GuiUtils.LayoutExpandWidth); //"Tf range"
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_AttitudeController_label8"), _uiTfMin, "", 50); //"min"
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_AttitudeController_label9"), _uiTfMax, "", 50); //"max"
-                ClampTfRange();
-                GUILayout.EndHorizontal();
+                Vector3d action = PropAct + INTAccum;
+
+                // Clamp (propAct + intAccum) to limit the angular velocity:
+                action = new Vector3d(Math.Max(-wlimit.x, Math.Min(wlimit.x, action.x)),
+                    Math.Max(-wlimit.y, Math.Min(wlimit.y, action.y)),
+                    Math.Max(-wlimit.z, Math.Min(wlimit.z, action.z)));
+
+                // add. derivative action
+                action += DerivativeAct;
+
+                // action clamp
+                action = new Vector3d(Math.Max(_min, Math.Min(_max, action.x)),
+                    Math.Max(_min, Math.Min(_max, action.y)),
+                    Math.Max(_min, Math.Min(_max, action.z)));
+                return action;
             }
 
-            GUILayout.EndVertical();
-            GUILayout.EndHorizontal();
-
-            SetLowPassFilter(GUILayout.Toggle(LowPassFilter, Localizer.Format("#MechJeb_AttitudeController_checkbox2"))); //" Low Pass Filter"
-
-            GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_PIDF")); //"PID factors"
-            GuiUtils.SimpleTextBox("Kd = ", _uiKdFactor, " / Tf", 50); //
-            GuiUtils.SimpleTextBox("Kp = pid.Kd / (", _uiKpFactor, " * Math.Sqrt(2) * Tf)", 50);
-            GuiUtils.SimpleTextBox("Ki = pid.Kp / (", _uiKiFactor, " * Math.Sqrt(2) * Tf)", 50);
-            ClampFactors();
-            GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_AttitudeController_PIDFactor1"), _uiDeadband, "", 50); //"Deadband = "
-            ClampDeadband();
-
-            GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_AttitudeController_label11"), KWlimit, "%"); //"Maximum Relative Angular Velocity"
-            double tmpKWlimit = KWlimit;
-            tmpKWlimit = (EditableDouble)GUILayout.HorizontalSlider((float)tmpKWlimit, 0.0F, 1.0F);
-
-            const int SLIDER_PRECISION = 3;
-            if (Math.Round(Math.Abs(tmpKWlimit - KWlimit), SLIDER_PRECISION) > 0)
-            {
-                KWlimit = Math.Round(tmpKWlimit, SLIDER_PRECISION);
-            }
-
-            //showInfos = GUILayout.Toggle(showInfos, "Show Numbers");
-            //if (showInfos)
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label12"), GuiUtils.LayoutExpandWidth); //"Kp"
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.Kp), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label13"), GuiUtils.LayoutExpandWidth); //"Ki"
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.Ki), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label14"), GuiUtils.LayoutExpandWidth); //"Kd"
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.Kd), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label15"), GuiUtils.LayoutExpandWidth); //"Error"
-                GUILayout.Label(MuUtils.PrettyPrint(_error * Mathf.Rad2Deg), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label16"), GuiUtils.LayoutExpandWidth); //"prop. action."
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.PropAct), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label17"), GuiUtils.LayoutExpandWidth); //"deriv. action"
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.DerivativeAct), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label18"), GuiUtils.LayoutExpandWidth); //"integral action."
-                GUILayout.Label(MuUtils.PrettyPrint(_pid.INTAccum), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label19"), GuiUtils.LayoutExpandWidth); //"PID Action"
-                GUILayout.Label(MuUtils.PrettyPrint(_pidAction), GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(Localizer.Format("#MechJeb_AttitudeController_label20"), GuiUtils.LayoutExpandWidth); //"Inertia"
-                GUILayout.Label("|" + Ac.Inertia.magnitude.ToString("F3") + "| " + MuUtils.PrettyPrint(Ac.Inertia),
-                    GuiUtils.LayoutNoExpandWidth);
-                GUILayout.EndHorizontal();
-            }
-
-            if (!TfAutoTune)
-            {
-                if (_tfV.x != _uiTfX || _tfV.y != _uiTfY || _tfV.z != _uiTfZ)
-                {
-                    _tfV.x = _uiTfX;
-                    _tfV.y = _uiTfY;
-                    _tfV.z = _uiTfZ;
-                    SetPIDParameters();
-                }
-            }
-            else
-            {
-                if (TfMin != _uiTfMin || TfMax != _uiTfMax)
-                {
-                    TfMin = _uiTfMin;
-                    TfMax = _uiTfMax;
-                    SetPIDParameters();
-                }
-            }
-
-            if (KpFactor != _uiKpFactor || KiFactor != _uiKiFactor || KdFactor != _uiKdFactor)
-            {
-                KpFactor = _uiKpFactor;
-                KiFactor = _uiKiFactor;
-                KdFactor = _uiKdFactor;
-                SetPIDParameters();
-            }
+            public void Reset() => INTAccum = Vector3d.zero;
         }
     }
 }

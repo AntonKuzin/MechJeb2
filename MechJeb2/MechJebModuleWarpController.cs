@@ -20,6 +20,7 @@ namespace MuMech
         private double warpIncreaseAttemptTime;
 
         private int lastAskedIndex;
+        private float _lastPausedMessageTime = float.NegativeInfinity;
 
         public double warpToUT   { get; private set; }
         public bool   WarpPaused { get; private set; }
@@ -30,39 +31,8 @@ namespace MuMech
         [UsedImplicitly, Persistent(pass = (int)Pass.GLOBAL)]
         public bool useQuickWarp;
 
-        public void useQuickWarpInfoItem() =>
-            useQuickWarp = GUILayout.Toggle(useQuickWarp, Localizer.Format("#MechJeb_WarpHelper_checkbox1")); //"Quick warp"
-
         [GeneralInfoItem("#MechJeb_MJWarpControl", InfoItem.Category.Misc)] //MJ Warp Control
-        public void ControlWarpButton()
-        {
-            if (WarpPaused && GUILayout.Button(Localizer.Format("#MechJeb_WarpHelper_button3"))) //"Resume MJ Warp"
-            {
-                ResumeWarp();
-            }
-
-            if (!WarpPaused && GUILayout.Button(Localizer.Format("#MechJeb_WarpHelper_button4"))) //"Pause MJ Warp"
-            {
-                PauseWarp();
-            }
-        }
-
-        public override void OnUpdate()
-        {
-            if (!WarpPaused && lastAskedIndex > 0 && lastAskedIndex != TimeWarp.CurrentRateIndex)
-            {
-                // Rate limited by the altitude so we should not care
-                if (!Vessel.LandedOrSplashed && TimeWarp.WarpMode == TimeWarp.Modes.HIGH &&
-                    TimeWarp.CurrentRateIndex == TimeWarp.fetch.GetMaxRateForAltitude(Vessel.altitude, Vessel.mainBody))
-                    return;
-
-                //print("Warppause : lastAskedIndex=" + lastAskedIndex + " CurrentRateIndex=" + TimeWarp.CurrentRateIndex + " WarpMode=" + TimeWarp.WarpMode + " MaxCurrentRate=" + TimeWarp.fetch.GetMaxRateForAltitude(vessel.altitude, vessel.mainBody));
-                WarpPaused = false;
-                //PauseWarp();
-
-                //ScreenMessages.PostScreenMessage("MJ : Warp canceled by user or an other mod");
-            }
-        }
+        public void ControlWarpButton() { }
 
         public override void OnFixedUpdate()
         {
@@ -96,10 +66,17 @@ namespace MuMech
                     Part.vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, true);
 
                 lastAskedIndex = rateIndex;
-                if (WarpPaused)
+                // Pausing stops MJ from raising the warp. Slowing down is always allowed, so autopilots that need to
+                // stop warping (node executor, landing) still work.
+                if (WarpPaused && rateIndex >= TimeWarp.CurrentRateIndex)
                 {
-                    ScreenMessages.PostScreenMessage(
-                        Localizer.Format("#MechJeb_WarpHelper_scrmsg")); //"MJ : Warp paused - resume in the Warp Helper menu"
+                    // the autopilots ask every tick, do not flood the screen
+                    if (Time.realtimeSinceStartup - _lastPausedMessageTime > 5f)
+                    {
+                        _lastPausedMessageTime = Time.realtimeSinceStartup;
+                        ScreenMessages.PostScreenMessage(
+                            Localizer.Format("#MechJeb_WarpHelper_scrmsg")); //"MJ : Warp paused - resume in the Warp Helper menu"
+                    }
                 }
                 else
                 {

@@ -16,7 +16,7 @@ namespace MuMech
 
         private ReentrySimulation.SimCurves simCurves;
 
-        private QuaternionD vesselToPart;
+        protected QuaternionD vesselToPart;
         private QuaternionD partToVessel;
 
         private static readonly Pool<SimulatedPart> pool = new Pool<SimulatedPart>(Create, Reset);
@@ -53,14 +53,51 @@ namespace MuMech
         {
         }
 
-        public static SimulatedPart Borrow(Part p, ReentrySimulation.SimCurves simCurve)
+        public static SimulatedPart Borrow(Part p, ReentrySimulation.SimCurves simCurve, int dropStage = -1)
         {
             SimulatedPart part = pool.Borrow();
-            part.Init(p, simCurve);
+            part.Init(p, simCurve, dropStage);
             return part;
         }
 
-        protected void Init(Part p, ReentrySimulation.SimCurves _simCurves)
+        // What DragCubeList.SetPartOcclusion does once a neighbour has gone: the part's faces towards it are in the air again.
+        private void ExposeFacesTowardsDroppedParts(Part p, int dropStage)
+        {
+            foreach (AttachNode node in p.attachNodes)
+            {
+                if (node?.attachedPart == null || !node.attachedPart.IsDecoupledInStage(dropStage))
+                    continue;
+
+                Vector3 direction = node.orientation.normalized;
+                for (int i = 0; i < 6; i++)
+                {
+                    float dot = Mathf.Clamp01(Vector3.Dot(direction, FaceDirections[i]));
+                    if (dot <= 0)
+                        continue;
+
+                    float dragOriginal = 0, weight = 0;
+                    foreach (DragCube cube in cubes.Cubes)
+                    {
+                        dragOriginal += cube.Drag[i] * cube.Weight;
+                        weight += cube.Weight;
+                    }
+
+                    if (weight > 0)
+                        dragOriginal /= weight;
+
+                    float area = cubes.WeightedArea[i];
+                    float exposed = Mathf.Min(area, cubes.AreaOccluded[i] + node.contactArea * dot);
+                    cubes.AreaOccluded[i] = exposed;
+                    if (exposed > 0)
+                        cubes.WeightedDrag[i] = Mathf.Max(0f, (dragOriginal * area - (area - exposed)) / exposed);
+                }
+            }
+        }
+
+        // the order of DragCube.DragFace
+        private static readonly Vector3[] FaceDirections = { Vector3.right, Vector3.left, Vector3.up, Vector3.down, Vector3.forward, Vector3.back };
+
+        protected void Init(Part p, ReentrySimulation.SimCurves _simCurves, int dropStage = -1)
         {
             Rigidbody rigidbody = p.rb;
 
@@ -76,6 +113,7 @@ namespace MuMech
             //cubes = new DragCubeList();
             CopyDragCubesList(p.DragCubes, cubes);
             cubes.ForceUpdate(true, true);
+            if (dropStage >= 0) ExposeFacesTowardsDroppedParts(p, dropStage);
 
             // Rotation to convert the vessel space vesselVelocity to the part space vesselVelocity
             // QuaternionD.LookRotation is not working...
@@ -247,6 +285,31 @@ namespace MuMech
                 dest.Area[i] = source.Area[i];
                 dest.Depth[i] = source.Depth[i];
                 dest.DragModifiers[i] = source.DragModifiers[i];
+            }
+        }
+
+        // DragCubeList.SetDragWeights does nothing after its first run unless ForceUpdate asks, and ForceUpdate flags the live neighbours,
+        // which isn't for the simulation's thread. So this writes the weighted faces itself, with no occlusion, as a deployed parachute has.
+        protected void ApplyCubeWeightsWithoutOcclusion()
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                float area = 0, drag = 0, depth = 0, weight = 0;
+                foreach (DragCube cube in cubes.Cubes)
+                {
+                    area += cube.Area[i] * cube.Weight;
+                    drag += cube.Drag[i] * cube.Weight;
+                    depth += cube.Depth[i] * cube.Weight;
+                    weight += cube.Weight;
+                }
+
+                if (weight <= 0)
+                    continue;
+
+                cubes.WeightedArea[i] = area / weight;
+                cubes.WeightedDrag[i] = drag / weight;
+                cubes.WeightedDepth[i] = depth / weight;
+                cubes.AreaOccluded[i] = area / weight;
             }
         }
 

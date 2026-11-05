@@ -44,13 +44,10 @@ namespace MuMech
         private const double MIN_SAMPLING_STEP = 12 * 3600;
 
         private Mode _selectionMode = Mode.PORKCHOP;
-        private int _windowWidth;
+        private int _windowWidth = PLOT_WIDTH; // not 0 when MakeNodes starts the computation before the window is shown
 
         private CelestialBody? _lastTargetCelestial;
         private TransferCalculator? _worker;
-        private PlotArea? _plot;
-
-        private static Texture2D? _texture;
 
         private bool _draggable = true;
         public override bool Draggable => _draggable;
@@ -61,16 +58,12 @@ namespace MuMech
 
         internal const int PLOT_WIDTH = 276;
         internal const int PLOT_HEIGHT = PORKCHOP_HEIGHT;
-
-        private bool _native;
         private bool _nativeChanged; // what GUI.changed is to DoParametersGUI
         private bool _nativePlotReady;
         private int[]? _nativeSelected;
         private Texture2D? _nativeTexture;
 
-        private int[]? SelectedPoint => _native ? _nativeSelected : _plot?.SelectedPoint;
-
-        private static GUIStyle? _progressStyle;
+        private int[]? SelectedPoint => _nativeSelected;
 
         private string? CheckPreconditions(Orbit o, MechJebModuleTargetController target)
         {
@@ -127,7 +120,6 @@ namespace MuMech
 
             if (_worker != null)
                 _worker.Stop = true;
-            _plot = null;
             _nativePlotReady = false;
             _nativeSelected = null;
 
@@ -163,149 +155,6 @@ namespace MuMech
             MaxArrivalTime.Val = synodicPeriod * 1.5 + hohmannTransferTime * 2.0;
         }
 
-        private bool _layoutSkipped;
-
-        private void DoPorkchopGui(Orbit o, double universalTime, MechJebModuleTargetController target)
-        {
-            var targetCelestial = target.Target as CelestialBody;
-
-            // That mess is why you should not compute anything inside a GUI call
-            // TODO : rewrite all that...
-            if (_worker == null)
-            {
-                if (Event.current.type == EventType.Layout)
-                    _layoutSkipped = true;
-                return;
-            }
-
-            if (Event.current.type == EventType.Layout)
-                _layoutSkipped = false;
-            if (_layoutSkipped)
-                return;
-
-            string dv = " - ";
-            string departure = " - ";
-            string duration = " - ";
-            if (_worker.Finished && _worker.Computed.GetLength(1) == PORKCHOP_HEIGHT)
-            {
-                if (_plot == null && Event.current.type == EventType.Layout)
-                {
-                    int width = _worker.Computed.GetLength(0);
-                    int height = _worker.Computed.GetLength(1);
-
-                    if (!(_texture is null) && (_texture.width != width || _texture.height != height))
-                    {
-                        Object.Destroy(_texture);
-                        _texture = null;
-                    }
-
-                    _texture ??= new Texture2D(width, height, TextureFormat.RGB24, false);
-
-                    Porkchop.RefreshTexture(_worker.Computed, _texture);
-
-                    _plot = new PlotArea(
-                        _worker.MinDepartureTime,
-                        _worker.MaxDepartureTime,
-                        _worker.MinTransferTime,
-                        _worker.MaxTransferTime,
-                        _texture,
-                        (xMin, xMax, yMin, yMax) =>
-                        {
-                            _minDepartureTime = Math.Max(xMin, universalTime);
-                            _maxDepartureTime = xMax;
-                            _minTransferTime = Math.Max(yMin, 3600);
-                            _maxTransferTime = yMax;
-                            GUI.changed = true;
-                        }) { SelectedPoint = new[] { _worker.BestDate, _worker.BestDuration } };
-                }
-            }
-
-            if (_plot != null)
-            {
-                int[] point = _plot.SelectedPoint;
-                if (_plot.HoveredPoint != null)
-                    point = _plot.HoveredPoint;
-
-                double p = _worker.Computed[point[0], point[1]];
-                if (p > 0)
-                {
-                    dv = p.ToSI() + "m/s";
-                    departure = _worker.DateFromIndex(point[0]) < Planetarium.GetUniversalTime()
-                        ? Localizer.Format("#MechJeb_adv_label1")
-                        : //any time now
-                        GuiUtils.TimeToDHMS(_worker.DateFromIndex(point[0]) - Planetarium.GetUniversalTime());
-                    duration = GuiUtils.TimeToDHMS(_worker.DurationFromIndex(point[1]));
-                }
-
-                _plot.DoGUI();
-                if (!_plot.Draggable) _draggable = false;
-            }
-            else
-            {
-                _progressStyle ??= new GUIStyle { font = GuiUtils.Skin.font, fontSize = GuiUtils.Skin.label.fontSize, fontStyle = GuiUtils.Skin.label.fontStyle, normal = { textColor = GuiUtils.Skin.label.normal.textColor } };
-                GUILayout.Box(Localizer.Format("#MechJeb_adv_computing") + _worker.Progress + "%", _progressStyle, GuiUtils.LayoutWidth(_windowWidth),
-                    GUILayout.Height(PORKCHOP_HEIGHT)); //"Computing:"
-            }
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("ΔV: " + dv);
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button(Localizer.Format("#MechJeb_adv_reset_button"), GuiUtils.YellowOnHover))
-                ComputeTimes(o, target.TargetOrbit, universalTime);
-            GUILayout.EndHorizontal();
-
-            _includeCaptureBurn = GUILayout.Toggle(_includeCaptureBurn, Localizer.Format("#MechJeb_adv_captureburn")); //"include capture burn"
-
-            // fixup the default value of the periapsis if the target changes
-            if (targetCelestial != null && _lastTargetCelestial != targetCelestial)
-            {
-                if (targetCelestial.atmosphere)
-                {
-                    _periapsisHeight = targetCelestial.atmosphereDepth / 1000 + 10;
-                }
-                else
-                {
-                    _periapsisHeight = 100;
-                }
-            }
-
-            GUILayout.BeginHorizontal();
-            GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_adv_periapsis"), _periapsisHeight, "km");
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GuiUtils.ToggledTextBox(ref _targetInclinationFlag, "Inclination", _targetInclination, "°");
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(Localizer.Format("#MechJeb_adv_label2")); //"Select: "
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button(Localizer.Format("#MechJeb_adv_button1"))) //Lowest ΔV
-            {
-                if (_plot != null)
-                {
-                    _plot.SelectedPoint = new[] { _worker.BestDate, _worker.BestDuration };
-                    GUI.changed = false;
-                }
-            }
-
-            if (GUILayout.Button(Localizer.Format("#MechJeb_adv_button2"))) //ASAP
-            {
-                if (_plot != null)
-                {
-                    _plot.SelectedPoint = new[] { 0, AsapDuration(_worker) };
-                    GUI.changed = false;
-                }
-            }
-
-            GUILayout.EndHorizontal();
-
-            GUILayout.Label(Localizer.Format("#MechJeb_adv_label3") + " " + departure); //Departure in
-            GUILayout.Label(Localizer.Format("#MechJeb_adv_label4") + " " + duration); //Transit duration
-
-            _lastTargetCelestial = targetCelestial;
-        }
-
         private static int AsapDuration(TransferCalculator worker)
         {
             int bestDuration = 0;
@@ -318,53 +167,17 @@ namespace MuMech
             return bestDuration;
         }
 
-        public override void DoParametersGUI(Orbit o, double universalTime, MechJebModuleTargetController target)
-        {
-            _native = false;
-            _draggable = true;
-            if (_worker != null && !target.NormalTargetExists && Event.current.type == EventType.Layout)
-            {
-                _worker.Stop = true;
-                _worker = null;
-                _plot = null;
-            }
-
-            _selectionMode = (Mode)GuiUtils.ComboBox.Box((int)_selectionMode, _modeNames, this);
-            if (Event.current.type == EventType.Repaint)
-                _windowWidth = (int)GUILayoutUtility.GetLastRect().width;
-
-            switch (_selectionMode)
-            {
-                case Mode.LIMITED_TIME:
-                    GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_adv_label5"), MaxArrivalTime); //Max arrival time
-                    if (_worker is { Finished: false })
-                        GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_adv_computing") + _worker.Progress + "%");
-                    break;
-                case Mode.PORKCHOP:
-                    DoPorkchopGui(o, universalTime, target);
-                    break;
-            }
-
-            if (_worker == null || _worker.DestinationOrbit != target.TargetOrbit || _worker.OriginOrbit != o)
-                ComputeTimes(o, target.TargetOrbit, universalTime);
-
-            if (GUI.changed || _worker == null || _worker.DestinationOrbit != target.TargetOrbit || _worker.OriginOrbit != o)
-                ComputeStuff(o, universalTime, target);
-        }
-
         // ---- the new UI ----
 
         /// <summary>DoParametersGUI without the drawing, run every frame while this operation is selected.</summary>
         internal override void ViewUpdate(Orbit o, double universalTime, MechJebModuleTargetController target)
         {
-            _native = true;
             _draggable = true;
             _windowWidth = PLOT_WIDTH;
             if (_worker != null && !target.NormalTargetExists)
             {
                 _worker.Stop = true;
                 _worker = null;
-                _plot = null;
                 _nativePlotReady = false;
                 _nativeSelected = null;
             }
@@ -520,8 +333,8 @@ namespace MuMech
             double epoch = w.DateFromIndex(dateIndex);
             double arrivalDt = w.DurationFromIndex(durationIndex);
 
-            // If the user picks a point, bound the arrival DT to the point
-            double arrivalBracket = (w.MaxDepartureTime - w.MinDepartureTime) / w.DateSamples;
+            // If the user picks a point, bound the arrival DT to the point: half a duration step either side of it
+            double arrivalBracket = w.DurationStep;
             double arrivalDtLower = arrivalDt - 0.5 * arrivalBracket;
             double arrivalDtUpper = arrivalDt + 0.5 * arrivalBracket;
 
@@ -532,8 +345,9 @@ namespace MuMech
                 arrivalDtUpper = double.PositiveInfinity;
             }
 
+            // the maximum arrival time counts from the start of the plot, and the duration from the departure
             if (_selectionMode == Mode.LIMITED_TIME && MaxArrivalTime > 0)
-                arrivalDtUpper = MaxArrivalTime;
+                arrivalDtUpper = Math.Max(MaxArrivalTime - (epoch - w.MinDepartureTime), arrivalDt);
 
             return (epoch, arrivalDt, arrivalDtLower, arrivalDtUpper);
         }
@@ -567,7 +381,8 @@ namespace MuMech
 
             double inc = _targetInclinationFlag ? _targetInclination.Val : double.NaN;
 
-            return OrbitalManeuverCalculator.OptimizeEjectionToTarget(o, target, targetPeR, epoch, arrivalDt, arrivalDtLower, arrivalDtUpper, inc);
+            // the burn mustn't come before the start of the orbit it is planned on: ASAP's epoch is that start, and an old plot's is before it
+            return OrbitalManeuverCalculator.OptimizeEjectionToTarget(o, target, targetPeR, epoch, arrivalDt, arrivalDtLower, arrivalDtUpper, inc, ut);
         }
     }
 }

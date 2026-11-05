@@ -318,12 +318,16 @@ namespace MuMech
             else
                 Core.Staging.AutoStageLimitRequest(Solution.TerminalKSPStage(), this);
 
-            if (Solution.Coast(VesselState.Time))
+            // terminal guidance may have shut down the burn before the coast slightly ahead of the (frozen) solution's planned
+            // coast start, so stay in the coast until the solution's coast is behind us instead of relighting and marking it done.
+            bool solutionCoast = Solution.Coast(VesselState.Time);
+
+            if (solutionCoast || (IsCoasting() && Solution.WillCoast(VesselState.Time)))
             {
                 if (!IsCoasting())
                     DoCoast();
 
-                if (Solution.StageTimeLeft(VesselState.Time) < UllageLeadTime)
+                if (solutionCoast && Solution.StageTimeLeft(VesselState.Time) < UllageLeadTime)
                     RCSOn();
 
                 ThrustOff();
@@ -375,7 +379,7 @@ namespace MuMech
             // lock the inertial heading at tgo < 2.0 for any staging event or terminal burnout
             // (2 seconds is to hopefully allow for variance due to residuals, it may be less)
             if (IsGrounded() || (idx >= 0 && Solution.Tgo(VesselState.Time, idx) > 2.0))
-                (_inertial, _throttle) = Solution.InertialGuidance(VesselState.Time);
+                (_inertial, _throttle) = Solution.InertialGuidance(VesselState.Time, VesselState.MinThrottle);
 
             (double pitch, double heading) = Astro.ECIToPitchHeading(r0, _inertial);
 
@@ -441,8 +445,9 @@ namespace MuMech
                 return;
             }
 
-            // if we still have a coast to do in this stage, start the coast
-            if (Vessel.currentStage == Solution.CoastKSPStage() && Solution.WillCoast(VesselState.Time))
+            // if the burn we just shut down is followed by the coast, start the coast.  for a coast in a lower KSP stage
+            // (coast-before/dedicated) HandleThrottle then stages off the spent booster, as it does for a timed coast start.
+            if (Solution.CoastFollows(VesselState.Time))
             {
                 ThrustOff();
                 DoCoast();

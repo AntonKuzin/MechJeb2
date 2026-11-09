@@ -10,6 +10,13 @@ namespace MechJebLib.FuelFlowSimulation
     public struct SimResource
     {
         public bool Free;
+
+        // gathered from the air by an intake (IntakeAir): free where there is air, missing where there is none
+        public bool FromIntake;
+
+        // and its intakes only gather it where the atmosphere has oxygen (KSP's checkForOxygen)
+        public bool NeedsOxygen;
+
         public double MaxAmount;
         private double _amount;
 

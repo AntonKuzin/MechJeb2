@@ -7,6 +7,7 @@ using System;
 using System.Threading;
 using MechJebLib.Primitives;
 using MechJebLib.PSG.Terminal;
+using MechJebLib.Utils;
 using static MechJebLib.Utils.Statics;
 using static System.Math;
 
@@ -18,12 +19,15 @@ namespace MechJebLib.PSG
 
         public readonly Problem Problem;
         public readonly PhaseCollection Phases;
+        // the snapshot the AscentBuilder took, which nothing changes, so it is safe to read on the worker thread
+        public readonly FlightPlan? FlightPlan;
         public readonly ITerminal Terminal;
         public readonly ObjectiveType Objective;
         private readonly VariableProxy _vars;
 
         private readonly alglib.minnlcreport _rep = new alglib.minnlcreport();
         private readonly alglib.ndimensional_sjac _constraintHandle;
+        private readonly FsqpKktStop _kktStop = new FsqpKktStop();
         private alglib.minnlcstate _state = new alglib.minnlcstate();
 
         /// <summary>
@@ -38,6 +42,8 @@ namespace MechJebLib.PSG
         public int Iterations;
         public int TerminationType;
         public double PrimalFeasibility;
+        public double DualFeasibility;
+        public double Complementarity;
         public double InitialPrimalFeasibility;
         public double Cost;
         public Solution? Solution;
@@ -49,16 +55,19 @@ namespace MechJebLib.PSG
         public int    Maxits              { get; set; } = 4000;
         public double SQPTrustRegionLimit { get; set; } = 1e-6;
         public double Epsf                { get; set; } = 1e-9;
+        public double ConstraintTolerance { get; set; } = 3e-9;
+        public double OptimalityTolerance { get; set; } = FsqpKktStop.DEFAULT_OPTIMALITY_TOLERANCE; // zero never stops on this
         public double Diffstep            { get; set; } = 1e-9;
         public double Stpmax              { get; set; } = 10;
         public int    OptimizerTimeout    { get; set; } = DEFAULT_TIMEOUT; // milliseconds, per Run()
         public double ZeroCoastTime       { get; set; } = 1; // seconds, minimum coast of a burn-coast-burn with a nonzero first burn
         public double ZeroCoastMu         { get; set; } = 1e-6;
 
-        public Optimizer(Problem problem, PhaseCollection phases, ITerminal terminal, ObjectiveType objective)
+        public Optimizer(Problem problem, PhaseCollection phases, FlightPlan? flightPlan, ITerminal terminal, ObjectiveType objective)
         {
             Phases = phases.DeepCopy();
             Phases.SetControlContinuity();
+            FlightPlan = flightPlan;
             Terminal = terminal;
             Objective = objective;
             _vars = new VariableProxy(problem, Phases, Terminal, N);
@@ -495,14 +504,18 @@ namespace MechJebLib.PSG
 #endif
             //alglib.trace_file("SQP,SQP.PROBINGONFAILURE,PREC.F6", "/tmp/trace.log");
 
-            alglib.minnlcoptimize(_state, _constraintHandle, null, null);
+            alglib.minnlcoptimize(_state, _constraintHandle, _kktStop.Attach(_state, ConstraintTolerance, OptimalityTolerance), null);
             alglib.minnlcresultsbuf(_state, ref x, _rep);
 
             TerminationType = _rep.terminationtype;
             Iterations = _rep.iterationscount;
+            DualFeasibility = _kktStop.DualInfeasibility;
+            Complementarity = _kktStop.Complementarity;
 
             PrintDebug("terminationtype: " + TerminationType);
             PrintDebug("iterations: " + Iterations);
+            PrintDebug($"DualFeasibility: {DualFeasibility}");
+            PrintDebug($"Complementarity: {Complementarity}");
 
             alglib.minnlcoptguardresults(_state, out alglib.optguardreport ogrep);
 
@@ -526,7 +539,7 @@ namespace MechJebLib.PSG
             PrintDebug($"PrimalFeasibility: {PrimalFeasibility}");
 
             _vars.WrapVars(x);
-            Solution solution = new SolutionBuilder(N, _vars, Problem, Phases, _ascentProblem).Build();
+            Solution solution = new SolutionBuilder(N, _vars, Problem, Phases, FlightPlan, _ascentProblem).Build();
 
             return solution;
         }

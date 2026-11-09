@@ -150,9 +150,15 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool PartHasResource(SimPart part, int resourceId)
         {
-            if (part.TryGetResource(resourceId, out SimResource resource))
-                return resource.Amount > part.Resources[resourceId].MaxAmount * ModuleResiduals + part.ResourceRequestRemainingThreshold;
-            return false;
+            if (!part.TryGetResource(resourceId, out SimResource resource))
+                return false;
+
+            // no air to gather in vacuum, so an air-breathing engine stops there (KSP's flow Clamp would otherwise keep it
+            // running on free air with next to no thrust, for millions of seconds); nor in an atmosphere with no oxygen
+            if (resource.FromIntake && (_atmDensity <= 0 || (resource.NeedsOxygen && !Part.Vessel.ATMOxygen)))
+                return false;
+
+            return resource.Amount > resource.MaxAmount * ModuleResiduals + part.ResourceRequestRemainingThreshold;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -296,17 +302,21 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             SetConsumptionRates();
         }
 
+        // KSP's ModuleEngines.OnLoad derives the fuel flows from the thrusts at the vacuum isp, but an engine which leaves a fuel
+        // flow at zero gets it from its thrust here.  the flow and the thrusts both use these, so they agree.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private double FlowRateAtConditions()
-        {
-            double minFuelFlow = MinFuelFlow;
-            double maxFuelFlow = MaxFuelFlow;
+        private double EffectiveMinFuelFlow() =>
+            MinFuelFlow == 0 && MinThrust > 0 ? MinThrust / (AtmosphereCurve.Evaluate(0f) * G) : MinFuelFlow;
 
-            if (minFuelFlow == 0 && MinThrust > 0) minFuelFlow = MinThrust / (AtmosphereCurve.Evaluate(0f) * G);
-            if (maxFuelFlow == 0 && MaxThrust > 0) maxFuelFlow = MaxThrust / (AtmosphereCurve.Evaluate(0f) * G);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private double EffectiveMaxFuelFlow() =>
+            MaxFuelFlow == 0 && MaxThrust > 0 ? MaxThrust / (AtmosphereCurve.Evaluate(0f) * G) : MaxFuelFlow;
 
-            return Lerp(minFuelFlow, maxFuelFlow, _throttle * 0.01f * ThrottleLimiter) * FlowMultiplier;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private double FlowRateAtConditions() =>
+            // as in KSP's ModuleEngines.RequiredPropellantMass, multFlow (TestFlight's thrust-loss failures) scales the mass flow
+            // along with the flowMultiplier, so it lowers the thrust and lengthens the burn without changing the isp
+            Lerp(EffectiveMinFuelFlow(), EffectiveMaxFuelFlow(), _throttle * 0.01f * ThrottleLimiter) * FlowMultiplier * MultFlow;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RefreshThrust()
@@ -317,12 +327,13 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
 
             double thrustLimiter = ThrottleLimiter / 100f;
 
-            double maxThrust = MaxFuelFlow * FlowMultiplier * ISP * G * MultIsp * MultFlow;
-            double minThrust = MinFuelFlow * FlowMultiplier * ISP * G * MultIsp * MultFlow;
+            double maxThrust = EffectiveMaxFuelFlow() * FlowMultiplier * ISP * G * MultIsp * MultFlow;
+            double minThrust = EffectiveMinFuelFlow() * FlowMultiplier * ISP * G * MultIsp * MultFlow;
 
             double eMaxThrust = minThrust + (maxThrust - minThrust) * thrustLimiter;
             double eMinThrust = ThrottleLocked ? eMaxThrust : minThrust;
-            double eCurrentThrust = MassFlowRate * ISP * G * MultIsp * MultFlow;
+            // the MassFlowRate already carries the FlowMultiplier and MultFlow
+            double eCurrentThrust = MassFlowRate * ISP * G * MultIsp;
 
             for (int i = 0; i < ThrustDirectionVectors.Count; i++)
             {
@@ -416,7 +427,10 @@ namespace MechJebLib.FuelFlowSimulation.PartModules
             // this is also the volume flow rate of the non-ignoreForIsp fuels.  although this is a bit janky since the p.ratios in most
             // stock engines sum up to 2, not 1 (1.1 + 0.9), so this is not per-liter but per-summed-ratios (the massflowrate you get out
             // of the atmosphere curves (above) are also similarly adjusted by these ratios -- it is a bit of a horror show).
-            double volumeFlowRate = MassFlowRate / totalDensity;
+            // when no propellant counts for the density (an ElectricCharge-only engine, or one whose only propellants with mass are
+            // ignoreForIsp) KSP's ModuleEngines divides by 1 instead (its mixtureDensityRecip), and so does this: dividing by 0 made
+            // the flow infinite.
+            double volumeFlowRate = totalDensity > 0 ? MassFlowRate / totalDensity : MassFlowRate;
 
             for (int j = 0; j < Propellants.Count; j++)
             {

@@ -702,8 +702,10 @@ namespace MuMech
 
             //torqueRcs.Reset();
 
-            if (!Vessel.ActionGroups[KSPActionGroup.RCS])
-                return;
+            // The thrust counts whether or not the RCS group is on, so a burn can be timed before RCS turns on: the node executor's
+            // "RCS only" turns it on at ignition. The torque counts only while the group is on, as before: it goes into TorqueAvailable,
+            // which the attitude controller tunes on, and RCS gives no attitude control with the group off.
+            bool rcsGroup = Vessel.ActionGroups[KSPActionGroup.RCS];
 
             MechJebModuleRCSBalancer rcsbal = Vessel.GetMasterMechJeb().Rcsbal;
             if (rcsbal.Enabled)
@@ -753,8 +755,11 @@ namespace MuMech
                     //if (rcsbal.enabled)
                     //    continue;
 
-                    if (p.ShieldedFromAirstream || !rcs.rcsEnabled || !rcs.isEnabled || rcs.isJustForShow || rcs.flameout || !rcs.rcs_active)
+                    if (p.ShieldedFromAirstream || !rcs.rcsEnabled || !rcs.isEnabled || rcs.isJustForShow || rcs.flameout)
                         continue;
+
+                    // ModuleRCS copies the RCS group into rcs_active in its own FixedUpdate: the torque needs both, the thrust neither
+                    bool countTorque = rcsGroup && rcs.rcs_active;
 
                     var attitudeControl = new Vector3(rcs.enablePitch ? 1 : 0, rcs.enableRoll ? 1 : 0, rcs.enableYaw ? 1 : 0);
 
@@ -798,6 +803,9 @@ namespace MuMech
                             RCSThrustAvailable.Add(Vector3.Scale(Vessel.GetTransform().InverseTransformDirection(thrusterThrust),
                                 translationControl));
                         }
+
+                        if (!countTorque)
+                            continue;
 
                         Vector3d thrusterTorque = Vector3.Cross(thrusterPosition, thrusterThrust);
 
@@ -1217,7 +1225,9 @@ namespace MuMech
             if (ThrustVectorMaxThrottle.magnitude == 0 && Vessel.ActionGroups[KSPActionGroup.RCS])
             {
                 RCSThrust = true;
-                ThrustVectorMaxThrottle += Forward * RCSThrustAvailable.Down;
+                // RCSThrustAvailable is indexed by the direction of the force on the vessel: the main throttle pushes it forward (Up),
+                // with the nozzles that point back
+                ThrustVectorMaxThrottle += Forward * RCSThrustAvailable.Up;
             }
             else
             {
@@ -1366,7 +1376,8 @@ namespace MuMech
 
                 foreach (Propellant propellant in e.propellants)
                 {
-                    double maxreq = e.maxFuelFlow * propellant.ratio;
+                    // maxFuelFlow is in tonnes per second: units per second need the mixture density (as the comment above says)
+                    double maxreq = e.maxFuelFlow * e.mixtureDensityRecip * propellant.ratio;
                     AddResource(propellant.id, propellant.currentRequirement, maxreq);
                 }
 
@@ -1492,6 +1503,7 @@ namespace MuMech
 
                 req.RequiredLastFrame += current;
                 req.RequiredAtMaxThrottle += max;
+                ResourceRequired[id] = req; // a struct: req is a copy
             }
 
             public struct FuelRequirement
@@ -1692,6 +1704,7 @@ namespace MuMech
                     capacity = capacity * density / dT; // convert to kg/s
                     mass = Math.Min(mass, capacity);
 
+                    IntakeAvailable += mass;
                     Intakes.Add(new IntakeData(intake, mass));
                 }
             }

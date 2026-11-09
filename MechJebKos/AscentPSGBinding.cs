@@ -8,7 +8,6 @@ using kOS.Safe.Encapsulation;
 using kOS.Safe.Encapsulation.Suffixes;
 using kOS.Safe.Exceptions;
 using kOS.Safe.Utilities;
-using MechJebLib.Functions;
 
 namespace MuMech.MechJebKos
 {
@@ -29,8 +28,6 @@ namespace MuMech.MechJebKos
         public AscentPSGBinding(Func<MechJebCore?> core) : base(core) { }
 
         protected override AscentType TargetType => AscentType.PSG;
-
-        protected override EditableDouble InclinationSetting => Core.PSGSimulation.Inc;
 
         protected override void InitializeTypeSuffixes()
         {
@@ -98,10 +95,11 @@ namespace MuMech.MechJebKos
 
             // --- guidance solution (read-only) ---
             // PSG can take ~20s to converge an initial solution from a cold start. Staging before there
-            // is a solution drops the rocket on the pad, so a launch script should wait on HASSOLUTION
-            // (e.g. "WAIT UNTIL ADDONS:MECHJEB:ASCENT:PSG:HASSOLUTION") before releasing the clamps.
+            // is a solution drops the rocket on the pad, so a launch script that stages itself should wait on HASSOLUTION
+            // (e.g. "WAIT UNTIL ADDONS:MECHJEB:ASCENT:PSG:HASSOLUTION") before releasing the clamps. Starting a timed launch
+            // clears the solution until the optimizer solves again, and MechJeb holds its own T-0 staging until then.
             AddSuffix("HASSOLUTION", new Suffix<BooleanValue>(() => Core.Guidance.Solution != null,
-                "True once the optimizer has produced a guidance solution. Wait on this before staging to launch."));
+                "True once the optimizer has produced a guidance solution; starting a timed launch clears it until the optimizer solves again. Wait on this before staging to launch manually (a timed launch holds its own staging until there is one)."));
             AddSuffix("GUIDANCESTATUS", new Suffix<StringValue>(() => Core.Guidance.Status.ToString(),
                 "PSG guidance controller status (ENABLED, INITIALIZED, BURNING, COASTING, TERMINAL, ...)."));
             AddSuffix("VGO", new Suffix<ScalarValue>(() => Core.Guidance.Vgo,
@@ -126,20 +124,8 @@ namespace MuMech.MechJebKos
                 throw new KOSException("Launch to LAN requires the vessel to be landed.");
 
             Engage();
-            AscentSettings.LaunchingToLan = true;
             Core.PSGSimulation.LAN.Val = degrees;
-
-            VesselState vs = Core.VesselState;
-            double time = Astro.TimeToPlane(
-                Core.vessel.mainBody.rotationPeriod,
-                vs.Latitude,
-                vs.CelestialLongitude,
-                Core.PSGSimulation.LAN,
-                InclinationSetting);
-
-            double launchUT = vs.Time + time;
-            Module.StartCountdown(launchUT);
-            return launchUT;
+            return Core.LaunchCountdown.StartToLan();
         }
 
         private ScalarValue LaunchToTargetLan()
@@ -151,19 +137,7 @@ namespace MuMech.MechJebKos
                 throw new KOSException("Launch to target LAN requires the vessel to be landed.");
 
             Engage();
-            AscentSettings.LaunchingToMatchLan = true;
-
-            VesselState vs = Core.VesselState;
-            double time = Astro.TimeToPlane(
-                Core.vessel.mainBody.rotationPeriod,
-                vs.Latitude,
-                vs.CelestialLongitude,
-                targetOrbit.LAN - AscentSettings.LaunchLANDifference,
-                InclinationSetting);
-
-            double launchUT = vs.Time + time;
-            Module.StartCountdown(launchUT);
-            return launchUT;
+            return Core.LaunchCountdown.StartToTargetLan();
         }
     }
 }

@@ -17,6 +17,10 @@ namespace MechJebLib.PSG
 {
     // Evaluating a Solution updates its interpolants' lookup caches, so one Solution must never be used from two threads:
     // give each thread its own DeepCopy().
+    //
+    // FlightPlan is the snapshot of the plan this solution was built from (see AscentBuilder.FlightPlan), not the caller's
+    // live plan, and nothing may change it.  Each phase's FlightPlanIndex indexes its Stages, and since the stage list is
+    // frozen in flight the same index finds the stage in the live plan too.
     public class Solution : IDisposable
     {
         public double T0;
@@ -31,6 +35,7 @@ namespace MechJebLib.PSG
         private readonly double _mu;
         private readonly double _rbody;
         public readonly Problem Problem;
+        public readonly FlightPlan? FlightPlan;
 
         public  int    Segments       => Phases.Count;
         private double _timeScale     => _scale.TimeScale;
@@ -41,9 +46,10 @@ namespace MechJebLib.PSG
         public double Tmax => _tmax[Segments - 1];
         public double Tmin => _tmin[0];
 
-        public Solution(Problem problem)
+        public Solution(Problem problem, FlightPlan? flightPlan)
         {
             Problem = problem;
+            FlightPlan = flightPlan;
             _scale = problem.Scale;
             _mu = problem.Mu;
             _rbody = problem.RBody * _scale.LengthScale;
@@ -66,7 +72,7 @@ namespace MechJebLib.PSG
 
         public Solution DeepCopy()
         {
-            var dup = new Solution(Problem);
+            var dup = new Solution(Problem, FlightPlan?.DeepCopy());
             // T0 may have moved on since construction (guidance slides it forward while waiting on the pad)
             dup.T0 = T0;
             for (int i = 0; i < _interpolants.Count; i++)
@@ -252,13 +258,17 @@ namespace MechJebLib.PSG
             return TgoBar(tbar, n) * _timeScale;
         }
 
+        // The burn time left in a KSP stage, summed over all of its burn phases.  This does not start from the phase the clock
+        // is in: a vessel can stage ahead of the clock (a fixed booster burning out before its predicted end), and starting
+        // from the booster phase would find no phases for the new stage and return zero.  TgoBar gives zero for phases in the
+        // past, so a stage burned past its predicted end (residuals) still returns zero.
         public double TgoForKSPStage(double t, int kspStage)
         {
             double tbar = (t - T0) / _timeScale;
             double sum = 0;
-            for (int i = IndexForTbar(tbar); i < Phases.Count && Phases[i].KSPStage == kspStage; i++)
+            for (int i = 0; i < Phases.Count; i++)
             {
-                if (Phases[i].Coast)
+                if (Phases[i].Coast || Phases[i].KSPStage != kspStage)
                     continue;
                 sum += TgoBar(tbar, i) * _timeScale;
             }
@@ -347,6 +357,12 @@ namespace MechJebLib.PSG
         public int KSPStage(int phase) => Phases[phase].KSPStage;
 
         public int MJPhase(int phase) => Phases[phase].MJPhase;
+
+        // -1 without a FlightPlan
+        public int FlightPlanIndex(int phase) => Phases[phase].FlightPlanIndex;
+
+        // the stage of this solution's FlightPlan snapshot that the phase was built from, null without a FlightPlan
+        public FlightPlanStage? FlightPlanStage(int phase) => FlightPlan?.Stages[Phases[phase].FlightPlanIndex];
 
         public double StageTimeLeft(double t)
         {
@@ -458,8 +474,9 @@ namespace MechJebLib.PSG
         /// <param name="pos">Current BCI position</param>
         /// <param name="vel">Current BCI velocity</param>
         /// <param name="t">Current World time</param>
+        /// <param name="kspStage">The vessel's current KSP stage, which the checked phase must not come before</param>
         /// <returns></returns>
-        public bool TerminalGuidanceSatisfied(V3 pos, V3 vel, double t)
+        public bool TerminalGuidanceSatisfied(V3 pos, V3 vel, double t, int kspStage)
         {
             /*
              NOTE: This algorithm suggests that there's a higher level abstraction above a phase/physical rocket stage which fuses
@@ -475,11 +492,14 @@ namespace MechJebLib.PSG
 
             if (tbar < Tmax)
             {
-                int idx = IndexForTbar(tbar);
+                // the vessel may have staged ahead of the clock (a fixed booster burning out before its predicted end), so
+                // never check against a phase before the current KSP stage, such as the end of that booster
+                int first = Max(IndexForKSPStage(kspStage, false), 0);
+                int idx = Max(IndexForTbar(tbar), first);
                 // back up to find an AllowShutdown stage if we've gone past the terminal time and
                 // hit a coast or a fixed burn time stage (the first phase may be a coast in a solution
                 // computed during the coast, so don't walk off the front)
-                while (idx > 0 && (!Phases[idx].AllowShutdown || Phases[idx].Coast))
+                while (idx > first && (!Phases[idx].AllowShutdown || Phases[idx].Coast))
                     idx--;
                 // go forward to the end of this multi-stage burn segment until we hit a coast or fixed stages
                 while (idx < Segments - 1 && Phases[idx].AllowShutdown && Phases[idx + 1].AllowShutdown && !Phases[idx + 1].Coast)

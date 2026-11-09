@@ -45,7 +45,7 @@ namespace MuMech
             }
         }
 
-        public MechJebModuleAscentBaseAutopilot AscentAutopilot => GetAscentModule(AscentType);
+        public IAscentAutopilot AscentAutopilot => GetAscentModule(AscentType);
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDoubleMult DesiredOrbitAltitude = new EditableDoubleMult(100000, 1000);
@@ -53,6 +53,7 @@ namespace MuMech
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDouble DesiredInclination = new EditableDouble(0.0);
 
+        // has no effect: nothing reads it. Kept so that kOS scripts setting RELATIVELAN still run.
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public bool RelativeLAN = false;
 
@@ -95,7 +96,7 @@ namespace MuMech
                 bool changed = value != _autostage;
                 _autostage = value;
                 if (!changed) return;
-                if (_autostage && Enabled)
+                if (_autostage && AscentAutopilot.Enabled)
                 {
                     Core.Staging.Users.Add(AscentAutopilot);
                 }
@@ -118,6 +119,9 @@ namespace MuMech
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public bool LimitingAoA = false;
+
+        // the AoA limit the ascent autopilot's limiter last computed, for the settings window
+        public double CurrentMaxAoA;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public readonly EditableDouble LaunchLANDifference = LAUNCH_LAN_DIFFERENCE;
@@ -226,7 +230,7 @@ namespace MuMech
 
         private readonly AscentType[] _values = (AscentType[])Enum.GetValues(typeof(AscentType));
 
-        private MechJebModuleAscentBaseAutopilot GetAscentModule(AscentType type)
+        private IAscentAutopilot GetAscentModule(AscentType type)
         {
             return type switch
             {
@@ -242,8 +246,6 @@ namespace MuMech
                 if (type != AscentType)
                     GetAscentModule(type).Enabled = false;
         }
-
-        public override void OnFixedUpdate() => DisableAscentModules();
 
         public override void OnStart(PartModule.StartState state)
         {

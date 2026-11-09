@@ -24,6 +24,8 @@ namespace MechJebLibBindings.FuelFlowSimulation
             private Dictionary<SimPart, Part>             _inversePartMapping       => _manager._inversePartMapping;
             private Dictionary<SimPartModule, PartModule> _inversePartModuleMapping => _manager._inversePartModuleMapping;
             private SimVessel                             _vessel                   => _manager._vessel;
+            private HashSet<int>                          _intakeResources          => _manager._intakeResources;
+            private HashSet<int>                          _intakeResourcesWithoutOxygen => _manager._intakeResourcesWithoutOxygen;
 
             private static readonly FieldContext _pfDecoupled = Assembly("ProceduralFairings").Class("Keramzit.ProceduralFairingDecoupler").Field("decoupled");
             private static readonly FieldContext _rfPredictedMaximumResiduals = Assembly("RealFuels").Class("RealFuels.ModuleEnginesRF").Field("predictedMaximumResiduals");
@@ -71,7 +73,7 @@ namespace MechJebLibBindings.FuelFlowSimulation
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private static void UpdateResources(SimPart part, Part kspPart)
+            private void UpdateResources(SimPart part, Part kspPart)
             {
                 part.Resources.Clear();
                 part.DisabledResourcesMass = 0;
@@ -87,12 +89,17 @@ namespace MechJebLibBindings.FuelFlowSimulation
                         continue;
                     }
 
+                    // intake air has a density (0.005) but is not fuel: the intakes gather it while the engines run
+                    bool fromIntake = _intakeResources.Contains(kspResource.info.id);
+
                     var resource = new SimResource
                     {
                         Amount = kspResource.amount,
                         MaxAmount = kspResource.maxAmount,
                         Id = kspResource.info.id,
-                        Free = kspResource.info.density == 0,
+                        Free = kspResource.info.density == 0 || fromIntake,
+                        FromIntake = fromIntake,
+                        NeedsOxygen = fromIntake && !_intakeResourcesWithoutOxygen.Contains(kspResource.info.id),
                         Density = kspResource.info.density,
                         Residual = 0
                     };

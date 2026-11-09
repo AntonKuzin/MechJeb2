@@ -12,6 +12,7 @@ using Xunit;
 
 namespace MechJebLibTest.PSGTests.AscentTests
 {
+    [ParallelTestMethods]
     public class KerbinTests
     {
         private const double MU = 3531600000000;
@@ -84,7 +85,7 @@ namespace MechJebLibTest.PSGTests.AscentTests
             (psg.Objective == Optimizer.ObjectiveType.MIN_THRUST_ACCEL).ShouldBeTrue();
             psg.PrimalFeasibility.ShouldBeZero(1e-5);
             solution.Vgo(t0).ShouldEqual(3522.6470530283032, 1e-3);
-            solution.Tgo(t0).ShouldEqual(472.31028465910936, 1e-3);
+            solution.Tgo(t0).ShouldEqual(470.75279556221687, 1e-3);
 
             solution.OptimizeKSPStage().ShouldEqual(0);
             solution.TerminalKSPStage().ShouldEqual(0);

@@ -6,6 +6,7 @@
 
 extern alias JetBrainsAnnotations;
 using System;
+using System.Collections.Generic;
 using MechJebLib.FuelFlowSimulation;
 using MechJebLib.Primitives;
 using MechJebLib.PSG;
@@ -109,10 +110,7 @@ namespace MuMech
         protected override void OnModuleEnabled()
         {
             Debug.Log("Enabling PSG Simulation");
-            SuccessfulConverges = LastLmStatus = MaxLmIterations = 0;
-            LastLmStatus = LastLmIterations = 0;
-            Staleness = LastInfeasibility = _lastTime = 0;
-            LastFailureMessage = null;
+            ResetCounters();
             _ascent = null;
             _solution = null;
             // FIXME: should throw and disable on no logicalplan or flightplan
@@ -142,14 +140,56 @@ namespace MuMech
             _ascent = null;
         }
 
+        private void ResetCounters()
+        {
+            SuccessfulConverges = LastLmStatus = MaxLmIterations = 0;
+            LastLmStatus = LastLmIterations = 0;
+            Staleness = LastInfeasibility = _lastTime = 0;
+            LastFailureMessage = null;
+        }
+
+        /// <summary>
+        ///     Forgets everything solved so far, including the solve in progress and what guidance is flying. A timed launch calls
+        ///     this because the launch site will have rotated away and the target has changed, so none of it applies any more.
+        /// </summary>
+        public void FlushSolution()
+        {
+            CancelJob();
+            // a cancelled job can still be reading _solution until it stops, so the next job must not be handed it
+            _solution = null;
+            ResetCounters();
+            Core.Guidance.FlushSolution();
+        }
+
         private void HandleStageEvent(int data) => _blockOptimizerUntilTime = VesselState.Time + OptimizerPauseTime;
 
         public void RequestFlightPlanUpdate()
         {
-            // the flight plan is frozen in flight
-            if (Enabled)
+            // the flight plan is frozen in flight, once there is one
+            if (Enabled && FlightPlan != null)
                 return;
             FlightPlan = LogicalPlan == null ? null : FlightPlan.FromLogicalPlan(LogicalPlan.Plan, Core.StageStats.VacStats, Core.StageStats.AtmoStats, MinDeltaV);
+        }
+
+        /// <summary>
+        ///     Builds the logical plan from the stage stats and the ascent settings, then the flight plan from it (unless that is
+        ///     frozen). The Ascent window calls this every physics frame while it is open with PSG selected, and the PSG ascent
+        ///     autopilot until there is a flight plan, so launches don't depend on that window being open (kOS launches never
+        ///     open it). Returns whether there were stages to plan.
+        /// </summary>
+        public bool UpdateLogicalPlan(MechJebModuleAscentSettings settings)
+        {
+            List<FuelStats> vacStats = Core.StageStats.VacStats;
+
+            if (vacStats.Count == 0)
+                return false;
+
+            LogicalPlan = new PersistedLogicalPlan(MechJebLib.PSG.LogicalPlan.GenerateLogicalPlan(vacStats, settings.UnguidedStages, settings.FixedStages,
+                settings.LastStage, MinDeltaV, settings.CoastStage, settings.CoastLocation));
+
+            RequestFlightPlanUpdate();
+
+            return true;
         }
 
         private void HandleDoneTask()
@@ -300,7 +340,8 @@ namespace MuMech
                 Ascent.AscentBuilder ascentBuilder = Ascent.Builder()
                    .Initial(Core.StageStats.VacR, Core.StageStats.VacV, Core.StageStats.VacU, Core.StageStats.VacT
                       , MainBody.gravParameter, MainBody.Radius)
-                   .SetTarget(peR, apR, attR, Deg2Rad(Inc), Deg2Rad(lan), ArgP, fpa, attachAltFlag, lanflag, ArgPFlag);
+                   .SetTarget(peR, apR, attR, Deg2Rad(Inc), Deg2Rad(lan), ArgP, fpa, attachAltFlag, lanflag, ArgPFlag)
+                   .FlightPlan(FlightPlan);
 
                 // note that we have to solve the atmospheric solution even when flying in vacuum, or the optimizer may decide to dip back
                 // into the atmosphere again and burn up the rocket.
@@ -364,21 +405,24 @@ namespace MuMech
                                 double ispCurrent = stage.AtmoISP;
 
                                 ascentBuilder.AddStage(fuelStats.StartMass * 1000, fuelStats.EndMass * 1000, fuelStats.MaxThrust * 1000, fuelStats.Isp,
-                                    stage.KSPStage, stage.MJStage, stage.Unguided, stage.AllowShutdown, massContinuity, ispCurrent, minThrottle);
+                                    stage.KSPStage, stage.MJStage, stage.Unguided, stage.AllowShutdown, massContinuity, ispCurrent, minThrottle, flightPlanIndex: i);
                                 massContinuity = false;
                                 break;
                             }
                         case StageType.COAST_DURING:
                             if (i != startingIndex)
                                 massContinuity = true; // this coast and next burn should be mass continuity.
-                            ascentBuilder.AddCoast(fuelStats.StartMass * 1000, fuelStats.EndMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity);
+                            ascentBuilder.AddCoast(fuelStats.StartMass * 1000, fuelStats.EndMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity,
+                                flightPlanIndex: i);
                             break;
                         case StageType.COAST_BEFORE:
                         case StageType.COAST_DEDICATED:
-                            ascentBuilder.AddCoast(fuelStats.StartMass * 1000, fuelStats.StartMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity);
+                            ascentBuilder.AddCoast(fuelStats.StartMass * 1000, fuelStats.StartMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity,
+                                flightPlanIndex: i);
                             break;
                         case StageType.COAST_AFTER:
-                            ascentBuilder.AddCoast(fuelStats.EndMass * 1000, fuelStats.EndMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity);
+                            ascentBuilder.AddCoast(fuelStats.EndMass * 1000, fuelStats.EndMass * 1000, mint, maxt, stage.KSPStage, stage.MJStage, stage.Unguided, massContinuity,
+                                flightPlanIndex: i);
                             break;
                         default:
                             throw new ArgumentOutOfRangeException();
